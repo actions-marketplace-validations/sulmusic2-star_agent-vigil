@@ -8,6 +8,7 @@ import type { SessionToolCall } from "../transcript.ts";
 import { toolCallFingerprint } from "../transcript.ts";
 import { escapeRegExpLiteral } from "../regex.ts";
 import { checkAgenticPatches, checkAgenticRepository, type AgenticPatch } from "./agentic.ts";
+import { checkEmptyTestBodies } from "./test-bodies.ts";
 
 const completedCandidateSetups = new Set<string>();
 // Integrity evidence is held in memory; oversized output is a blocking evidence gap, never an empty/clean scan.
@@ -861,8 +862,10 @@ function isTestPath(path: string): boolean {
   return /(^|\/)(test|tests|__tests__|spec)(\/|$)|(^|\/)test_[^/]+\.[^.]+$|(?:\.test|\.spec|\.cy|_test)\.[^.]+$/i.test(path);
 }
 
-function isGeneratedOrVendorPath(path: string): boolean {
-  return /^(?:node_modules|vendor|dist|build|coverage|\.git)\//.test(path);
+export function isGeneratedOrVendorPath(path: string): boolean {
+  return /(?:^|\/)(?:node_modules|vendor|vendored|\.git)(?:\/|$)/.test(path)
+    || /^(?:dist|build|coverage)\//.test(path)
+    || /\.map$/i.test(path);
 }
 
 function isDocumentationPath(path: string): boolean {
@@ -1149,11 +1152,14 @@ export function checkIntegrity(repo: string, base: string, head: string): CheckR
   let headTests = 0;
   const deletedTestFiles: Array<{ path: string; identity: string }> = [];
   const addedTestFiles: Array<{ path: string; identity: string }> = [];
+  const emptyTestPaths = new Set<string>();
+  const fullTestBodyChecks: Array<{ path: string; checks: CheckResult[] }> = [];
   for (const path of [...paths].filter(isTestPath)) {
     const before = readIntegrityTreeBlob(repo, base, path);
     if (!before.ok) return [unreadableIntegrityResult("changed test baseline available for integrity review", before.evidence, "integrity-unreadable")];
     const after = head === "WORKTREE" ? readIntegrityWorktreeBlob(repo, path) : readIntegrityTreeBlob(repo, head, path);
     if (!after.ok) return [unreadableIntegrityResult("changed test candidate available for integrity review", after.evidence, "integrity-unreadable")];
+    fullTestBodyChecks.push({ path, checks: checkEmptyTestBodies(path, before.value, after.value) });
     const oldCount = countTests(before.value);
     const newCount = countTests(after.value);
     baselineTests += oldCount;
@@ -1205,7 +1211,17 @@ export function checkIntegrity(repo: string, base: string, head: string): CheckR
     return [unreadableIntegrityResult("untracked worktree evidence is readable", untracked.error, "integrity-unreadable")];
   }
   const patches = [...parsed.patches, ...untracked.patches].filter((patch) => !exactTestMovePaths.has(patch.path));
-  results.push(...checkIntegrityPatches(patches));
+  for (const { path, checks } of fullTestBodyChecks) {
+    if (exactTestMovePaths.has(path)) continue;
+    if (checks.some((check) => check.ruleId === "test-empty-added")) emptyTestPaths.add(path);
+    results.push(...checks);
+  }
+  const patchResults = checkIntegrityPatches(patches);
+  // Full-file findings already explain the empty callback. Avoid repeating a
+  // weaker aggregate assertion-count warning or a second empty-test warning.
+  results.push(...patchResults.filter((result) => ![...emptyTestPaths].some((path) =>
+    (result.ruleId === "test-empty-added" && result.evidence.startsWith(`${path} adds `))
+    || (result.ruleId === "assertion-drop" && result.evidence.startsWith(`${path} removes `)))));
   results.push(...checkAgenticPatches(patches));
   results.push(...checkAgenticRepository(repo, base, head, paths, patches));
 
@@ -1411,6 +1427,19 @@ function checkIntegrityPatches(patches: FilePatch[]): CheckResult[] {
         || /\[(?:TestMethod|Test|Fact|Theory)\b[^\]]*\][\s\S]*?\bvoid\s+[A-Za-z0-9_]+\s*\([^)]*\)\s*\{\s*\}/s.test(added)) {
         results.push(finding("empty test introduced", `${patch.path} adds a test body with no observable assertion or behavior`, "test-empty-added"));
       }
+      const retainedTestText = [...patch.added, ...patch.context].join("\n");
+      const removedPatchAssertions = patch.removed.filter((line) => /\b(?:expect|assert|should)\b/i.test(line)).length;
+      const addedPatchAssertions = patch.added.filter((line) => /\b(?:expect|assert|should)\b/i.test(line)).length;
+      const retainedEmptyJavaScriptTest = /\b(?:it|test)\s*\([^,]+,\s*(?:async\s*)?\(?(?:[^)=]*)\)?\s*=>\s*\{\s*\}\s*\)/s.test(retainedTestText)
+        || /\b(?:it|test)\s*\([^,]+,\s*function\s*\([^)]*\)\s*\{\s*\}\s*\)/s.test(retainedTestText);
+      if (removedPatchAssertions > 0 && addedPatchAssertions === 0 && retainedEmptyJavaScriptTest
+        && !results.some((result) => result.ruleId === "assertion-drop")) {
+        results.push(finding(
+          "assertion surface shrank",
+          `${patch.path} removes ${removedPatchAssertions} assertion-like line(s) and leaves an empty test body`,
+          "assertion-drop",
+        ));
+      }
       if (/\bexpect\s*\(\s*(true|false|null|undefined|["'][^"']*["']|\d+)\s*\)\s*\.\s*(?:toBe|toEqual|toStrictEqual)\s*\(\s*\1\s*\)/s.test(added)
         || /\bassert(?:\.ok)?\s*\(\s*true\s*\)/.test(added)
         || /\bassert\.(?:equal|strictEqual)\s*\(\s*([A-Za-z_$][\w$]*)\s*,\s*\1\s*\)/.test(added)
@@ -1435,11 +1464,6 @@ function checkIntegrityPatches(patches: FilePatch[]): CheckResult[] {
       }
       if (/\b(?:jest|vi)\.fn\s*\(\s*\)\s*\.mock(?:ReturnValue|Implementation)/.test(added)) {
         results.push(finding("test replaces the subject with a self-fulfilling mock", `${patch.path} adds a value-producing local mock in the assertion path`, "subject-mocked"));
-      }
-      const removedHunkAssertions = patch.removed.filter((line) => /\b(?:expect|assert|should)\b/i.test(line)).length;
-      const addedHunkAssertions = patch.added.filter((line) => /\b(?:expect|assert|should)\b/i.test(line)).length;
-      if (removedHunkAssertions > addedHunkAssertions && !results.some((result) => result.ruleId === "assertion-drop")) {
-        results.push(finding("assertion surface shrank", `${patch.path} hunk removes ${removedHunkAssertions} assertion-like line(s) and adds ${addedHunkAssertions}`, "assertion-drop"));
       }
     }
     const removedCode = patch.removed.map(normalizedCodeLine).filter(Boolean);
@@ -1472,7 +1496,12 @@ function checkIntegrityPatches(patches: FilePatch[]): CheckResult[] {
   }
   const removedAssertions = testPatches.flatMap((patch) => patch.removed).filter((line) => /\b(?:expect|assert|should)\b/i.test(line)).length;
   const addedAssertions = testPatches.flatMap((patch) => patch.added).filter((line) => !line.includes("vigil:detector-pattern") && /\b(?:expect|assert|should)\b/i.test(line)).length;
-  if (removedAssertions > addedAssertions && !results.some((result) => result.ruleId === "assertion-drop")) {
+  // Judge the complete change, not one file in isolation. Assertions are
+  // routinely moved or consolidated across test files; a per-file warning
+  // produced heavy review noise even when the PR added more assertions than
+  // it removed. A net loss across the entire supplied diff remains visible.
+  if (removedAssertions > addedAssertions
+    && !results.some((result) => result.ruleId === "assertion-drop" || result.ruleId === "test-count-drop")) {
     results.push(finding(
       "assertion surface shrank",
       `${removedAssertions} assertion-like lines removed and ${addedAssertions} added`,
@@ -1509,8 +1538,16 @@ export function checkIntegrityDiff(diff: string): CheckResult[] {
       blocksPass: true,
     }];
   }
-  const parsed = parseFilePatches(diff);
-  if (parsed.invalidHeader || !parsed.patches.length) {
+  // A raw Git patch can bind a rename without consulting the repository when
+  // all four identities agree: diff --git, rename from/to, and ---/+++.
+  // parseFilePatches still rejects quoted, copied, dissimilar, incomplete, or
+  // mismatched metadata, so enabling exact rename parsing does not turn an
+  // ambiguous patch into verified evidence.
+  const parsed = parseFilePatches(diff, true);
+  const unreadable = parsed.invalidHeader
+    ? unreadableIntegrityResult("parseable changed files", parsed.invalidHeader, "diff-unparseable")
+    : undefined;
+  if (!parsed.patches.length) {
     return [{
       claim: { kind: "integrity", quote: "static unified-diff audit", subject: "parseable changed files" },
       verdict: "unverifiable",
@@ -1522,6 +1559,7 @@ export function checkIntegrityDiff(diff: string): CheckResult[] {
   }
   const patches = parsed.patches;
   const results = [...checkIntegrityPatches(patches), ...checkAgenticPatches(patches)];
+  if (unreadable) return [unreadable, ...results];
   return results.length ? results : [cleanIntegrityResult(patches.length, true)];
 }
 

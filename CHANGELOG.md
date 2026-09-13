@@ -2,6 +2,143 @@
 
 ## Unreleased
 
+- Pause protected-run output until both the private capture and terminal writes
+  finish. A slow consumer no longer overflows the relay queue for a finite run.
+  Output failures, capture limits and deadlines still stop the command.
+- Bind release validation to the requested clean checkout and committed bundles;
+  rebuilding a local file cannot hide different committed release bytes.
+- Run the release verifier's npm build through Node or the Windows command
+  wrapper as appropriate. Keep build failures and invalid launchers as failures.
+
+## 0.25.0 - Unreleased
+
+- Run printed setup and doctor commands through the current local Node and CLI,
+  retaining the selected repository without downloading another package. Keep
+  public acquisition guidance on the installation page, quote POSIX/PowerShell
+  paths literally, and retain the verified-archive fallback for removed caches.
+- Keep packaged installation instructions separate from the verified public
+  release. Verify downloads before local tarball execution and exercise both
+  the documented archive path and the printed local CLI handoff.
+- Preserve the App delivery-recovery and maintainer-rerun fixes already merged
+  on main. This package assembly does not deploy or activate the hosted App.
+- Include the protected-run controls and complete test-body integrity fixes
+  from the reconciled v0.24.4 source. Detection behavior is unchanged; supervisor output handling is corrected
+  as described above, alongside the CLI onboarding changes.
+- Protected runs cover ordinary macOS/Linux process groups, not hostile-workload
+  isolation or Windows process-tree guarantees. Dollar-budget requests refuse
+  before launch. Receipts do not establish correctness, acceptance, exact billing,
+  or economic value.
+
+## 0.24.4 - 2026-09-05
+
+- Inspect complete JavaScript test bodies so unrelated new assertions cannot
+  hide a test that was emptied. Report repeated-name ambiguity as NOT CHECKED.
+- Preserve exact test moves and distinguish literal regression examples from
+  executable tests. Add 30 adversarial cases for the mixed-change failure.
+- Keep repository verification and the JavaScript parser out of the telemetry
+  worker, with a regression test for its bundled dependencies.
+- Give the observer success fixture a realistic timing window and separately
+  prove that a timed-out host cannot pass or authorize deployment. Production
+  deadlines and verification rules are unchanged.
+- Retain failed coverage evidence without automatic retries or lower coverage
+  floors, and test unsupported coverage explicitly on older Node versions.
+
+- Add `vigil run`, a POSIX process-group circuit breaker with a mandatory wall
+  limit, optional fail-closed JSONL trajectory limits, and private self-hashed
+  receipts that keep correctness, exact cost, and economic value `NOT_CHECKED`.
+- Keep deadline and signal enforcement independent from transcript parsing with
+  a monotonic supervisor clock and packaged telemetry worker; enforce malformed
+  or incomplete requested telemetry immediately when the observed command exits.
+- Reject malformed counters, conflicting counter aliases, and totals that are
+  internally contradictory before or after streamed-record deduplication, and
+  return a supervisor error when final process-group termination cannot be
+  confirmed.
+- Distinguish Linux zombie-only process groups from executable descendants,
+  including runnable threads hidden behind a zombie thread-group leader; require
+  stable repeated task-membership snapshots before confirming termination,
+  avoid poisoning those snapshots with unchanged `hidepid`-inaccessible
+  processes proven to predate the detached session while failing closed for new
+  or changed inaccessible entries, and exercise containment under a deliberately
+  non-reaping container PID 1.
+- Bound final telemetry responses and worker shutdown so stalled responses
+  produce a supervisor-error receipt instead of an indefinite shutdown wait.
+- Bound pre-launch telemetry initialization and allow supervisor signals to
+  interrupt readiness without launching the protected command.
+
+## 0.24.3 - 2026-09-04
+
+- Stop protection setup before writing files when no test command is found,
+  rather than reporting readiness with a placeholder that fails the next step.
+- Extend the packed install rehearsal through commit and `doctor`, and require
+  repositories without test commands to be rejected without partial setup.
+
+- Keep packaged install instructions valid before and after publication, with
+  exact-version checks and a separate link to live distribution status.
+- Stop the GitHub download sequence if either download or checksum fails.
+- Rehearse the packed README's npm command in an empty repository without
+  credentials, using a local registry that serves the actual release tarball.
+
+## 0.24.2 - 2026-09-04
+
+- Install the reviewed public App control workflow on the default branch so the
+  Worker dispatch target exists before activation.
+- Make the hosted App readiness endpoint fail closed until every check,
+  deployment, registration, and Durable Object binding is configured.
+- Bind hosted pull-request verdicts to the current issue evidence so a body edit
+  cannot reuse a stale PASS.
+- Update artifact Actions and GitHub App authentication to their reviewed,
+  warning-free runtimes.
+- Prove the App-owned gate on live PASS, FAIL, stale-head, rollback, and
+  merge-queue staging paths without presenting first-party tests as adoption.
+
+## 0.24.1 - 2026-09-04
+
+- Keep the successful `protect` handoff on the same immutable GitHub release
+  package instead of printing an npm command before that version is public.
+- Treat packaged release instructions as an immutable release snapshot rather
+  than a claim about which distribution channel is currently newest.
+
+## 0.24.0 - 2026-09-04
+
+- Add a production-shaped independent release gate that binds fresh challenges, external allow effects, denied effects, exact executable bytes, managed policy bytes, and current-versus-candidate behavior to short-lived signed evidence.
+- Keep six trust roles separate across environment, challenge, observer, route, isolation, and admission signing, with KMS-compatible signing and fail-closed key checks.
+- Put exact repository, commit, environment, and artifact authorization behind the public GitHub App deployment-protection path while retaining the protected job's final byte check.
+- Record route-event and completion times and refuse admission when either falls outside the signed observer or managed-environment window.
+- Retain approved and rejected deployment decisions for bounded webhook replay, including rejections made without a registered authorization.
+- Preserve the frozen benchmark and publish a neutral competitor comparison: Agent Vigil leads paired-synthetic separation while Swarm leads constructive-injection recall and lower presumed-clean advisory coverage. No universal winner is claimed.
+- Keep production deployment, outside adoption, payment, and revenue as separate unproven gates.
+
+## 0.23.4 - 2026-09-01
+
+- Calibrate suppression and assertion-drop advisories against the frozen corpus, reducing presumed-clean advisory coverage from 57.8% to 44.8% without changing the 220/220 frozen oracle result.
+- Present one first-use decision vocabulary across terminal, Markdown, pull-request, and HTML output: PASS, FAIL, or NOT CHECKED, with the matching consequence, evidence, fix, and reproduction command.
+- Add the centrally operated public App worker and control workflow template for exact-head pull-request and merge-queue checks without customer-managed keys or Workers. The public service remains inactive until live outside acceptance.
+- Publish a neutral identical-diff comparison against Swarm with complete rows, bounded statistics, source commits, and explicit limits; no universal-superiority or revenue claim is made.
+- Add a two-commit release-assembly verifier that restricts protected release paths, rebuilds every distributed file, and binds all public Action pins to the reviewed runtime commit.
+- Accept GitHub App private keys in either unencrypted RSA PKCS#1 or PKCS#8
+  format and normalize them in memory before Web Crypto import.
+- Scope the protected pull-request App token to the target repository instead
+  of the Agent Vigil source repository.
+- Bind merge-queue dispatch to the configured App bot login so installations
+  are not limited to one globally unique GitHub App slug.
+- Record the first-party live acceptance case in which an App-bound required
+  check merged a passing queue composition and blocked a stale composition
+  whose earlier pull-request checks were green.
+
+## 0.23.3 - 2026-08-31
+
+- Ship the external merge-queue dispatcher, GitHub App manifest, and exact
+  `merge_group` workflow in the npm package so an organization can deploy the
+  same reviewed control without rebuilding it from repository source.
+- Keep the queue webhook inactive until the App, Worker, main-only environment,
+  and negative blocking test are configured and verified.
+- Stage npm from immutable stable-tag workflow bytes before publishing the
+  matching GitHub release, while retaining separate no-OIDC verification and
+  OIDC-only staging jobs.
+- Require the release tag commit to be contained in the repository's default
+  branch and preserve exact tag, commit, package, tarball, and integrity
+  bindings throughout trusted publishing.
+
 ## 0.23.2 - 2026-08-30
 
 - Replace vulnerable check-then-use file handling with descriptor-bound,

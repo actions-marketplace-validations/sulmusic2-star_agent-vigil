@@ -90,9 +90,31 @@ import {
   runGuardCompatibility,
   type GuardHost,
 } from "./guard-compat.ts";
-import { renderGuardRoute, runGuardRoute } from "./guard-route.ts";
+import { DISPOSABLE_PROFILE_MARKER, renderGuardRoute, runGuardRoute } from "./guard-route.ts";
+import { compareGuardRouteFiles, renderGuardRouteDiff } from "./guard-route-diff.ts";
+import { sealGuardRoute } from "./guard-route-seal.ts";
+import { loadGuardSignedEnvelope } from "./guard-control-protocol.ts";
+import { runGuardObserverCommand } from "./guard-observer-server.ts";
+import {
+  runGuardAdmissionCommand,
+  runGuardDeployAuthorizeCommand,
+  runGuardDeployBoundGateCommand,
+  runGuardDeployGateCommand,
+  runGuardDeployRegisterCommand,
+} from "./guard-admission-cli.ts";
+import { loadGuardRouteReport } from "./continuity/guard.ts";
+import {
+  GUARD_PROFILE_BINDING_FILE,
+  initializeGuardProfileBinding,
+  issueGuardEnvironmentStatement,
+  loadGuardEnvironmentStatement,
+  loadGuardPolicyFilesManifest,
+} from "./guard-environment.ts";
 import { outcomeUsage, runMandateCommand, runOutcomeReceiptCommand } from "./outcome-cli.ts";
-import { adoptionRegistrationUrl, githubRepositorySlug, releasedDoctorCommand, workflowBadge } from "./adoption.ts";
+import { localCliCommand } from "./adoption.ts";
+import { buildCursorExactCostEvidence, validateExactCostEvidence, type ExactCostEvidence } from "./cost-evidence.ts";
+import { runAutopsyCommand } from "./autopsy-cli.ts";
+import { runProtectedRunCommand } from "./run-cli.ts";
 
 type Options = {
   transcript?: string;
@@ -113,7 +135,7 @@ type Options = {
   minVerified?: number;
 };
 
-function usage(): string {
+function advancedUsage(): string {
   return `agent-vigil ${VERSION}
 
 Usage:
@@ -127,6 +149,16 @@ Usage:
   vigil prove [--repo <path>] [--base <sha>] [--format text|json] [--output <path>]
   vigil guard-compat --host claude|codex --host-version <version> --host-executable <path> --control-name <name> --control-version <version> --control-executable <path> --policy <path> --configuration <path> [options]
   vigil guard-route --host claude|codex --host-version <version> --host-executable <path> --profile-home <disposable-path> [options]
+  vigil guard-observer --host claude|codex --host-version <version> --host-executable-sha256 <sha256> --managed-environment-sha256 <sha256> [options]
+  vigil guard-route-seal --receipt <route.json> --signing-key <offline-ed25519-private.pem> --output <route.dsse.json>
+  vigil guard-diff --current <current-route.dsse.json> --candidate <candidate-route.dsse.json> --environment-public-key <pinned-environment-public.pem> --route-public-key <pinned-notary-public.pem> [--format text|json] [--output <path>]
+  vigil guard-admit --current-route <route.dsse.json> --current-challenge <challenge.dsse.json> --current-observation <observation.dsse.json> --candidate-route <route.dsse.json> --candidate-challenge <challenge.dsse.json> --candidate-observation <observation.dsse.json> [keys] --output <admission.dsse.json>
+  vigil guard-deploy-gate --admission <admission.dsse.json> --admission-public-key <admission.pem> --artifact <package> --environment-sha256 <sha256:...>
+  vigil guard-deploy-authorize --admission <admission.dsse.json> --admission-public-key <admission.pem> --repository <owner/name> --commit-sha <40-hex> --environment <name> [signer] --output <authorization.dsse.json>
+  vigil guard-deploy-register --authorization <authorization.dsse.json> --deployment-public-key <deployment.pem> --admission <admission.dsse.json> --admission-public-key <admission.pem> --url <https-url>
+  vigil guard-deploy-bound-gate --authorization <authorization.dsse.json> --deployment-public-key <deployment.pem> --admission <admission.dsse.json> --admission-public-key <admission.pem> --repository <owner/name> --commit-sha <40-hex> --environment <name> --artifact <package> --environment-sha256 <sha256:...>
+  vigil guard-environment init-profile --profile-home <disposable-path>
+  vigil guard-environment issue --host claude|codex --profile-home <path> --environment-id <id> --policy-manifest <json> --signing-key <pem> --valid-until <time> --output <json>
   vigil certify record <control-proof.json> --organization <name> --repository <owner/name> --required-check <name> --output <path>
   vigil certify sign <proof-payload.json> --private-key <pem> --output <path>
   vigil certify record-signed <signed-proof.json> --public-key <pem> --organization <name> --repository <owner/name> --required-check <name> --output <path>
@@ -149,6 +181,9 @@ Usage:
 \n${outcomeUsage()}
   vigil compare <before-receipt.json> <after-receipt.json> [--format text|json] [--output <path>]
   vigil github-evidence --event <event.json> [GitHub API exports] [--output <path>]
+  vigil cost-evidence cursor --transcript <session.jsonl> --usage-export <cursor-usage.json> [--output <path>]
+  vigil autopsy [<transcript.jsonl>] [--receipt <receipt.json> --public-key <public.pem>] [options]
+  vigil run --time-limit <duration> [trajectory options] -- <executable> [arguments...]
   vigil value <receipt.json> [--transcript <session.jsonl>] [--cost-usd <amount>] [options]
   vigil compare-value <card.json>... [--format text|json|html] [--output <path>]
   vigil audit <change.diff> [--strict] [--format <kind>] [--output <path>] [--sarif <path>]
@@ -185,7 +220,7 @@ Value options:
   --transcript <path>    Bind supported token usage to the receipt digest
   --github-evidence <p>  Import a hash-verified normalized GitHub evidence bundle
   --cost-usd <amount>    Attributed task cost; requires --cost-source
-  --cost-source <kind>   provider-billed, subscription-allocated, or user-estimated
+  --cost-source <kind>   provider-billed, provider-exported, subscription-allocated, or user-estimated
   --cost-evidence <path> Hash a local billing artifact without copying its contents
   --budget-usd <amount>  Predeclared task budget for WITHIN / EXCEEDED status
   --review-minutes <n>   Explicit human review duration
@@ -198,6 +233,34 @@ Value options:
   --format <kind>        text, json, markdown, or html
 
 Exit codes: 0 PASS · 1 FAIL · 2 INCONCLUSIVE or usage error`;
+}
+
+function usage(): string {
+  return `Agent Vigil ${VERSION}
+
+Check an AI-assisted pull request before it merges.
+
+Start here${process.platform === "win32" ? " (PowerShell)" : ""}:
+  ${localCliCommand("protect", import.meta.url)}
+
+Public installation guide: https://sulmusic2-star.github.io/agent-vigil/#install
+
+Then commit the generated setup files and open a setup pull request. After it
+merges, every new pull request gets one result:
+
+  PASS         Ready to merge.
+  FAIL         Do not merge yet.
+  NOT CHECKED  No decision because required evidence is missing.
+
+Useful commands:
+  vigil autopsy              Review whether a local agent run earned its cost
+  vigil run                  Stop a local agent command at declared limits
+  vigil protect              Add Agent Vigil to the current repository
+  vigil doctor               Check the setup
+  vigil check <pull-request> Check a public GitHub pull request
+  vigil demo                 See a safe local example
+
+Advanced commands: vigil help --all`;
 }
 
 function guardCompatibilityUsage(): string {
@@ -283,6 +346,93 @@ function runGuardCompatibilityCommand(args: string[]): number {
   }
 }
 
+function guardEnvironmentUsage(): string {
+  return `Agent Vigil signed managed-environment binding
+
+Usage:
+  vigil guard-environment init-profile --profile-home <disposable-path>
+  vigil guard-environment issue \\
+    --host claude|codex \\
+    --profile-home <disposable-path> \\
+    --environment-id <privacy-safe-name> \\
+    --policy-manifest <guard-policy-files-v1.json> \\
+    --signing-key <ed25519-private.pem> \\
+    --valid-until <rfc3339-utc> \\
+    --output <signed-environment.json> \\
+    [--issued-at <rfc3339-utc>]
+
+init-profile creates a unique, private marker without reading authentication
+files. issue signs the exact marker and 1-32 named policy-file hashes for at
+most seven days. Policy contents and authentication secrets are not copied
+into the statement. Keep the statement private if its local file paths are
+sensitive. Use a separately pinned public key with guard-route.`;
+}
+
+function runGuardEnvironmentCommand(args: string[]): number {
+  try {
+    if (args.includes("--help") || args.length < 2) { console.log(guardEnvironmentUsage()); return 0; }
+    const operation = args[1];
+    if (operation === "init-profile") {
+      const parsed = parseCommandArgs([args[0], ...args.slice(2)], new Set(["--profile-home"]));
+      if (parsed.positional.length) throw new Error("guard-environment init-profile accepts options only");
+      const requested = parsed.values.get("--profile-home");
+      if (!requested) throw new Error("guard-environment init-profile requires --profile-home <path>");
+      const profileHome = realpathSync(resolve(requested));
+      const marker = readBoundedRegularFile(
+        join(profileHome, ".agent-vigil-disposable-profile"),
+        DISPOSABLE_PROFILE_MARKER.length + 1,
+        "disposable profile marker",
+      ).toString("utf8");
+      if (marker !== DISPOSABLE_PROFILE_MARKER) throw new Error("disposable profile marker has unexpected content");
+      initializeGuardProfileBinding(profileHome);
+      console.log("Guard profile identity created. Keep the profile private and use the same profile for both exact-version route drills.");
+      return 0;
+    }
+    if (operation !== "issue") throw new Error(`unknown guard-environment operation: ${operation}`);
+    const parsed = parseCommandArgs([args[0], ...args.slice(2)], new Set([
+      "--host", "--profile-home", "--environment-id", "--policy-manifest",
+      "--signing-key", "--valid-until", "--issued-at", "--output",
+    ]));
+    if (parsed.positional.length) throw new Error("guard-environment issue accepts options only");
+    const required = (name: string): string => {
+      const value = parsed.values.get(name);
+      if (!value) throw new Error(`guard-environment issue requires ${name} <value>`);
+      return value;
+    };
+    const host = required("--host") as GuardHost;
+    if (host !== "claude" && host !== "codex") throw new Error("guard-environment --host must be claude or codex");
+    const profileHome = resolve(required("--profile-home"));
+    const manifest = resolve(required("--policy-manifest"));
+    const signingKey = resolve(required("--signing-key"));
+    const output = resolve(required("--output"));
+    const policyManifest = loadGuardPolicyFilesManifest(manifest);
+    assertGuardOutputIsDistinct(output, [
+      manifest,
+      signingKey,
+      join(profileHome, ".agent-vigil-disposable-profile"),
+      join(profileHome, GUARD_PROFILE_BINDING_FILE),
+      ...policyManifest.files.map((file) => file.path),
+    ]);
+    const statement = issueGuardEnvironmentStatement({
+      host,
+      profileHome,
+      environmentId: required("--environment-id"),
+      policyManifestPath: manifest,
+      privateKeyPath: signingKey,
+      validUntil: required("--valid-until"),
+      ...(parsed.values.get("--issued-at") ? { issuedAt: parsed.values.get("--issued-at")! } : {}),
+    });
+    writePrivateFileAtomic(output, `${JSON.stringify(statement, null, 2)}\n`);
+    console.log(`Signed guard environment written: ${output}`);
+    console.log(`Statement: ${statement.statementHash}`);
+    console.log(`Signer: ${statement.signature.keyId}`);
+    return 0;
+  } catch (error) {
+    console.error(`agent-vigil: ${(error as Error).message}\n\n${guardEnvironmentUsage()}`);
+    return 2;
+  }
+}
+
 function guardRouteUsage(): string {
   return `Agent Vigil live-host routing drill
 
@@ -292,16 +442,24 @@ Usage:
     --host-version <version> \\
     --host-executable <path> \\
     --profile-home <disposable-path> \\
+    [--environment-statement <signed-json> \\
+     --environment-public-key <pinned-ed25519-pem>] \\
+    [--external-challenge <challenge.dsse.json> \\
+     --challenge-public-key <pinned-ed25519-pem>] \\
     [--timeout-ms <1000-300000>] \\
     [--format text|json] \\
     [--output <path>]
 
 The profile directory must contain a file named
 .agent-vigil-disposable-profile with the exact documented marker. The drill
-temporarily installs one fail-closed hook, runs only two harmless printf
-canaries in an empty workspace, removes its host configuration, and leaves
+temporarily installs one fail-closed hook, runs only two harmless canaries in
+an empty workspace, removes its host configuration, and leaves
 the marked authentication profile for the operator to delete. A one-host
-PASS does not permit deployment or satisfy the two-host next-ticket gate.`;
+PASS does not permit deployment or satisfy the two-host next-ticket gate.
+An upgrade decision can APPROVE only v2 receipts created with a signed,
+pinned, fresh managed-environment statement. External observation also requires
+a short-lived signed challenge produced by guard-observer; in that mode the two
+canaries use exact one-time POST endpoints instead of local-only printf effects.`;
 }
 
 function runGuardRouteCommand(args: string[]): number {
@@ -309,6 +467,8 @@ function runGuardRouteCommand(args: string[]): number {
     if (args.includes("--help")) { console.log(guardRouteUsage()); return 0; }
     const parsed = parseCommandArgs(args, new Set([
       "--host", "--host-version", "--host-executable", "--profile-home",
+      "--environment-statement", "--environment-public-key",
+      "--external-challenge", "--challenge-public-key",
       "--timeout-ms", "--format", "--output",
     ]));
     if (parsed.positional.length) throw new Error("guard-route accepts options only");
@@ -326,8 +486,32 @@ function runGuardRouteCommand(args: string[]): number {
     if (timeoutValue !== undefined && !Number.isInteger(timeoutMs)) throw new Error("guard-route --timeout-ms must be an integer");
     const hostExecutable = resolve(required("--host-executable"));
     const profileHome = resolve(required("--profile-home"));
+    const environmentStatementPath = parsed.values.get("--environment-statement");
+    const environmentPublicKeyPath = parsed.values.get("--environment-public-key");
+    if (Boolean(environmentStatementPath) !== Boolean(environmentPublicKeyPath)) {
+      throw new Error("guard-route requires --environment-statement and --environment-public-key together");
+    }
+    const externalChallengePath = parsed.values.get("--external-challenge");
+    const challengePublicKeyPath = parsed.values.get("--challenge-public-key");
+    if (Boolean(externalChallengePath) !== Boolean(challengePublicKeyPath)) {
+      throw new Error("guard-route requires --external-challenge and --challenge-public-key together");
+    }
     const output = parsed.values.get("--output");
-    assertGuardOutputIsDistinct(output, [hostExecutable, join(profileHome, ".agent-vigil-disposable-profile")]);
+    assertGuardOutputIsDistinct(output, [
+      hostExecutable,
+      join(profileHome, ".agent-vigil-disposable-profile"),
+      join(profileHome, GUARD_PROFILE_BINDING_FILE),
+      ...(environmentStatementPath ? [environmentStatementPath] : []),
+      ...(environmentPublicKeyPath ? [environmentPublicKeyPath] : []),
+      ...(externalChallengePath ? [externalChallengePath] : []),
+      ...(challengePublicKeyPath ? [challengePublicKeyPath] : []),
+    ]);
+    const environmentStatement = environmentStatementPath
+      ? loadGuardEnvironmentStatement(environmentStatementPath)
+      : undefined;
+    if (output && environmentStatement) {
+      assertGuardOutputIsDistinct(output, environmentStatement.policies.map((policy) => policy.path));
+    }
     const report = runGuardRoute({
       host,
       hostVersion: required("--host-version"),
@@ -335,12 +519,121 @@ function runGuardRouteCommand(args: string[]): number {
       profileHome,
       vigilVersion: VERSION,
       ...(timeoutMs !== undefined ? { timeoutMs } : {}),
+      ...(environmentStatement && environmentPublicKeyPath ? {
+        environmentStatement,
+        environmentPublicKeyPath: resolve(environmentPublicKeyPath),
+      } : {}),
+      ...(externalChallengePath && challengePublicKeyPath ? {
+        externalChallengeEnvelope: loadGuardSignedEnvelope(resolve(externalChallengePath)),
+        externalChallengePublicKey: readBoundedRegularFile(resolve(challengePublicKeyPath), 64 * 1024, "guard challenge public key"),
+      } : {}),
     });
     if (output) writePrivateFileAtomic(resolve(output), `${JSON.stringify(report, null, 2)}\n`);
     console.log(format === "json" ? JSON.stringify(report, null, 2) : renderGuardRoute(report));
     return report.status === "PASS" ? 0 : report.status === "FAIL" ? 1 : 2;
   } catch (error) {
     console.error(`agent-vigil: ${(error as Error).message}\n\n${guardRouteUsage()}`);
+    return 2;
+  }
+}
+
+function guardRouteDiffUsage(): string {
+  return `Agent Vigil coding-agent upgrade decision
+
+Usage:
+  vigil guard-diff \\
+    --current <current-route.dsse.json> \\
+    --candidate <candidate-route.dsse.json> \\
+    --environment-public-key <pinned-environment-public.pem> \\
+    --route-public-key <pinned-notary-public.pem> \\
+    [--format text|json] \\
+    [--output <path>] [--evaluated-at <RFC3339>]
+
+Both inputs must be route receipts sealed outside the agent host. APPROVE is
+returned only when both full-receipt seals and their managed-environment
+signatures verify against two different, separately pinned keys,
+the current route passed, the host versions differ, every comparison binding
+matches, both receipts are fresh, and the candidate preserves both harmless
+allow and deny outcomes.
+Every missing, changed, failed, or inconclusive condition returns HOLD.`;
+}
+
+function guardRouteSealUsage(): string {
+  return `Agent Vigil route receipt sealing
+
+Usage:
+  vigil guard-route-seal \\
+    --receipt <route.json> \\
+    --signing-key <offline-ed25519-private.pem> \\
+    --output <route.dsse.json>
+
+Run this command in a separate notary environment after transferring the
+unsigned route receipt off the agent host. Never place the route-notary private
+key on the host being tested. The output is a DSSE envelope over the complete
+validated route receipt.`;
+}
+
+function runGuardRouteSealCommand(args: string[]): number {
+  try {
+    if (args.includes("--help")) { console.log(guardRouteSealUsage()); return 0; }
+    const parsed = parseCommandArgs(args, new Set(["--receipt", "--signing-key", "--output"]));
+    if (parsed.positional.length) throw new Error("guard-route-seal accepts options only");
+    const receipt = parsed.values.get("--receipt");
+    const signingKey = parsed.values.get("--signing-key");
+    const output = parsed.values.get("--output");
+    if (!receipt) throw new Error("guard-route-seal requires --receipt <route.json>");
+    if (!signingKey) throw new Error("guard-route-seal requires --signing-key <offline-ed25519-private.pem>");
+    if (!output) throw new Error("guard-route-seal requires --output <route.dsse.json>");
+    assertGuardOutputIsDistinct(output, [receipt, signingKey]);
+    const report = loadGuardRouteReport(resolve(receipt));
+    const envelope = sealGuardRoute(report, resolve(signingKey));
+    writePrivateFileAtomic(resolve(output), `${JSON.stringify(envelope, null, 2)}\n`);
+    console.log(`Sealed route receipt: ${report.receiptHash}`);
+    return 0;
+  } catch (error) {
+    console.error(`agent-vigil: ${(error as Error).message}\n\n${guardRouteSealUsage()}`);
+    return 2;
+  }
+}
+
+function runGuardRouteDiffCommand(args: string[]): number {
+  try {
+    if (args.includes("--help")) { console.log(guardRouteDiffUsage()); return 0; }
+    const parsed = parseCommandArgs(args, new Set([
+      "--current", "--candidate", "--environment-public-key", "--route-public-key", "--format", "--output", "--evaluated-at",
+    ]));
+    if (parsed.positional.length) throw new Error("guard-diff accepts options only");
+    const current = parsed.values.get("--current");
+    const candidate = parsed.values.get("--candidate");
+    const environmentPublicKey = parsed.values.get("--environment-public-key");
+    const routePublicKey = parsed.values.get("--route-public-key");
+    if (!current) throw new Error("guard-diff requires --current <current-route.json>");
+    if (!candidate) throw new Error("guard-diff requires --candidate <candidate-route.json>");
+    if (!environmentPublicKey) throw new Error("guard-diff requires --environment-public-key <pinned-ed25519-public.pem>");
+    if (!routePublicKey) throw new Error("guard-diff requires --route-public-key <pinned-notary-public.pem>");
+    const format = parsed.values.get("--format") ?? "text";
+    if (format !== "text" && format !== "json") throw new Error("guard-diff --format must be text or json");
+    const output = parsed.values.get("--output");
+    assertGuardOutputIsDistinct(output, [current, candidate, environmentPublicKey, routePublicKey]);
+    const trustedKey = readBoundedRegularFile(
+      resolve(environmentPublicKey),
+      64 * 1024,
+      "guard environment public key",
+    );
+    const trustedRouteKey = readBoundedRegularFile(
+      resolve(routePublicKey),
+      64 * 1024,
+      "guard route public key",
+    );
+    const report = compareGuardRouteFiles(
+      resolve(current), resolve(candidate), trustedKey, trustedRouteKey, parsed.values.get("--evaluated-at"),
+    );
+    if (output) writePrivateFileAtomic(resolve(output), `${JSON.stringify(report, null, 2)}\n`);
+    console.log(format === "json" ? JSON.stringify(report, null, 2) : renderGuardRouteDiff(report));
+    if (report.decision === "APPROVE") return 0;
+    return report.classification === "NOT_CHECKED" ? 2 : 1;
+  } catch (error) {
+    console.error(`agent-vigil: ${(error as Error).message}\n\n${guardRouteDiffUsage()}`);
     return 2;
   }
 }
@@ -674,6 +967,7 @@ function runProtect(args: string[]): number {
   try {
     validateCommandArgs(args, "protect", ["--repo", "--action-sha", "--runner", "--runner-image", "--test-cmd"], ["--force", "--attest"]);
     const repo = resolve(optionValue(args, "--repo") ?? ".");
+    const doctorCommand = localCliCommand("doctor", import.meta.url, repo);
     if (args.includes("--attest")) throw new Error("protect --attest is disabled for candidate-executing workflows until a separately controlled signer is available");
     const selectedPin = defaultActionPin();
     const actionSha = optionValue(args, "--action-sha") ?? selectedPin.sha;
@@ -683,7 +977,6 @@ function runProtect(args: string[]): number {
       runnerOverride);
     console.log("Agent Vigil is ready to add.\n");
     const policy = loadPolicy(repo).value;
-    const slug = githubRepositorySlug(git(repo, ["config", "--get", "remote.origin.url"]));
     const commands = policy.maintainer?.automatedReview?.commands ?? [];
     if (commands.length) console.log(`  Found   ${safeSetupLine(commands.join(" && "))}`);
     console.log(`  Pinned  ${actionSha}${optionValue(args, "--action-sha") ? " (operator selected)" : selectedPin.source === "package-build" ? " (this package build)" : " (reviewed public release)"}`);
@@ -696,18 +989,12 @@ function runProtect(args: string[]): number {
         console.error("\nAgent Vigil could not prove its disposable red/green rehearsal. The generated files remain prepared but must not be activated.");
         return 2;
       }
-      console.log("\nState: PREPARED — not active yet.");
-      console.log("\nNext:");
-      console.log("  1. Review the four generated files.");
-      console.log("  2. Commit and push them in a setup pull request.");
-      console.log(`  3. After that setup merges, run \`${releasedDoctorCommand()}\`.`);
-      console.log("\nState after setup: RUNNING IN CI, not enforced. A plain required job name is not a workflow trust root; enforcement needs an external required workflow or App-owned exact-head check.");
-      if (slug) {
-        console.log("\nOptional workflow badge (run status only; not proof of required-check enforcement):");
-        console.log(`  ${workflowBadge(slug)}`);
-      }
-      console.log("\nRegister an outside trial only after the workflow runs. Registration is optional and requires maintainer consent:");
-      console.log(`  ${adoptionRegistrationUrl(slug)}`);
+      console.log("\nSetup: READY — not running in GitHub yet.");
+      console.log("\nNext: commit the generated files and open one setup pull request.");
+      console.log(`After it merges, run this command${process.platform === "win32" ? " (PowerShell)" : ""}:\n  ${doctorCommand}`);
+      console.log("This uses the same local CLI. If its cached path is removed, use the verified-archive command in the installation guide.");
+      console.log("Then open a normal code pull request.");
+      console.log("That pull request will show PASS, FAIL, or NOT CHECKED. Making the result a protected merge requirement still needs the Agent Vigil App.");
       return 0;
     }
     const checks = doctorRepository(repo);
@@ -1107,8 +1394,8 @@ function parseValueArgs(args: string[]): ValueCliOptions {
   const format = values.get("--format") ?? "text";
   if (!new Set(["text", "json", "markdown", "html"]).has(format)) throw new Error("value --format must be text, json, markdown, or html");
   const costSource = values.get("--cost-source");
-  if (costSource && !new Set(["provider-billed", "subscription-allocated", "user-estimated"]).has(costSource)) {
-    throw new Error("value --cost-source must be provider-billed, subscription-allocated, or user-estimated");
+  if (costSource && !new Set(["provider-billed", "provider-exported", "subscription-allocated", "user-estimated"]).has(costSource)) {
+    throw new Error("value --cost-source must be provider-billed, provider-exported, subscription-allocated, or user-estimated");
   }
   const disposition = values.get("--disposition");
   if (disposition && !new Set(["accepted", "dismissed", "changes-requested", "unreviewed"]).has(disposition)) {
@@ -1175,7 +1462,30 @@ function runValue(args: string[]): number {
       const evidence = readBoundedFile(resolve(path), 64 * 1024 * 1024, label);
       return `sha256:${createHash("sha256").update(evidence).digest("hex")}`;
     };
-    const costEvidenceSha256 = evidenceHash(options.costEvidence, "cost evidence");
+    let costEvidenceSha256: string | undefined;
+    let exactCost: ExactCostEvidence | undefined;
+    if (options.costEvidence) {
+      const costEvidence = readBoundedFile(resolve(options.costEvidence), 64 * 1024 * 1024, "cost evidence");
+      costEvidenceSha256 = `sha256:${createHash("sha256").update(costEvidence).digest("hex")}`;
+      try {
+        const parsed = JSON.parse(costEvidence.toString("utf8"));
+        if (parsed?.schemaVersion === "agent-vigil-exact-cost-evidence/v1") exactCost = validateExactCostEvidence(parsed);
+      } catch (error) {
+        if (costEvidence.toString("utf8").includes("agent-vigil-exact-cost-evidence/v1")) throw error;
+      }
+    }
+    if (exactCost && exactCost.transcriptSha256 !== report.transcriptSha256) {
+      throw new Error("exact cost evidence is bound to a different transcript");
+    }
+    if (exactCost && options.costUsd !== undefined && Math.abs(options.costUsd - exactCost.amountUsd) > 1e-9) {
+      throw new Error("--cost-usd contradicts the exact cost evidence amount");
+    }
+    if (exactCost && options.costSource !== undefined && options.costSource !== "provider-exported") {
+      throw new Error("--cost-source contradicts provider-exported exact cost evidence");
+    }
+    if (options.costSource === "provider-exported" && !exactCost) {
+      throw new Error("--cost-source provider-exported requires validated exact cost evidence");
+    }
     const github = options.githubEvidence ? loadGitHubEvidence(resolve(options.githubEvidence)) : undefined;
     const inferredDisposition = options.disposition ?? github?.inference.disposition;
     const inferredOutcome = options.outcome ?? github?.inference.outcome;
@@ -1195,8 +1505,8 @@ function runValue(args: string[]): number {
       values: {
         taskClass: options.taskClass,
         budgetUsd: options.budgetUsd,
-        costUsd: options.costUsd,
-        costSource: options.costSource,
+        costUsd: options.costUsd ?? exactCost?.amountUsd,
+        costSource: options.costSource ?? (exactCost ? "provider-exported" : undefined),
         costEvidenceSha256,
         reviewMinutes: options.reviewMinutes,
         disposition: inferredDisposition,
@@ -1225,6 +1535,35 @@ function runValue(args: string[]): number {
     if (options.output) writePrivateFileAtomic(resolve(options.output), rendered);
     else process.stdout.write(rendered);
     return card.valueVerdict === "POSITIVE" ? 0 : card.valueVerdict === "NEGATIVE" ? 1 : 2;
+  } catch (error) { console.error(`agent-vigil: ${(error as Error).message}`); return 2; }
+}
+
+function runCostEvidence(args: string[]): number {
+  try {
+    if (args[1] !== "cursor") throw new Error("cost-evidence currently supports: cursor");
+    const transcript = optionValue(args, "--transcript");
+    const usageExport = optionValue(args, "--usage-export");
+    const output = optionValue(args, "--output");
+    if (!transcript || !usageExport) throw new Error("cost-evidence cursor requires --transcript and --usage-export");
+    const allowed = new Set(["--transcript", "--usage-export", "--output"]);
+    const seen = new Set<string>();
+    for (let index = 2; index < args.length; index += 2) {
+      if (!allowed.has(args[index])) throw new Error(`unknown cost-evidence argument: ${args[index]}`);
+      if (args[index + 1] === undefined || args[index + 1].startsWith("--")) throw new Error(`${args[index]} requires a value`);
+      if (seen.has(args[index])) throw new Error(`${args[index]} may be supplied only once`);
+      seen.add(args[index]);
+    }
+    const transcriptPath = resolve(transcript);
+    const usageExportPath = resolve(usageExport);
+    if (output && new Set([transcriptPath, usageExportPath]).has(resolve(output))) throw new Error("cost-evidence output must not replace an input file");
+    const evidence = buildCursorExactCostEvidence({
+      transcript: readBoundedRegularFile(transcriptPath, 50 * 1024 * 1024, "Cursor transcript"),
+      usageExport: readBoundedRegularFile(usageExportPath, 64 * 1024 * 1024, "Cursor usage export"),
+    });
+    const rendered = `${JSON.stringify(evidence, null, 2)}\n`;
+    if (output) writePrivateFileAtomic(resolve(output), rendered);
+    else process.stdout.write(rendered);
+    return 0;
   } catch (error) { console.error(`agent-vigil: ${(error as Error).message}`); return 2; }
 }
 
@@ -1494,13 +1833,31 @@ function shellQuote(value: string): string {
 }
 
 export function run(argv = process.argv.slice(2)): number {
+  if (argv.length === 0) { console.log(usage()); return 0; }
+  if (argv[0] === "help") {
+    console.log(argv.includes("--all") ? advancedUsage() : usage());
+    return 0;
+  }
+  if (argv.includes("--help-all")) { console.log(advancedUsage()); return 0; }
   if (argv[0] === "demo") return runDemo(run);
+  if (argv[0] === "autopsy") return runAutopsyCommand(argv.slice(1));
+  if (argv[0] === "run") {
+    console.error("agent-vigil: vigil run is asynchronous; invoke it through the command-line executable");
+    return 2;
+  }
   if (argv[0] === "continuity") return runContinuityCommand(argv.slice(1));
   if (argv[0] === "upgrade") return runUpgradeCommand(argv.slice(1));
   if (argv[0] === "protect") return runProtect(argv);
   if (argv[0] === "prove") return runProve(argv);
   if (argv[0] === "guard-compat") return runGuardCompatibilityCommand(argv);
+  if (argv[0] === "guard-environment") return runGuardEnvironmentCommand(argv);
   if (argv[0] === "guard-route") return runGuardRouteCommand(argv);
+  if (argv[0] === "guard-route-seal") return runGuardRouteSealCommand(argv);
+  if (argv[0] === "guard-diff") return runGuardRouteDiffCommand(argv);
+  if (argv[0] === "guard-admit") return runGuardAdmissionCommand(argv.slice(1));
+  if (argv[0] === "guard-deploy-authorize") return runGuardDeployAuthorizeCommand(argv.slice(1));
+  if (argv[0] === "guard-deploy-bound-gate") return runGuardDeployBoundGateCommand(argv.slice(1));
+  if (argv[0] === "guard-deploy-gate") return runGuardDeployGateCommand(argv.slice(1));
   if (argv[0] === "certify") return runCertify(argv);
   if (argv[0] === "plan") return runPlan(argv);
   if (argv[0] === "proof-comment") return runProofComment(argv);
@@ -1519,6 +1876,7 @@ export function run(argv = process.argv.slice(2)): number {
   if (argv[0] === "notary") return runNotary(argv);
   if (argv[0] === "compare") return runCompare(argv);
   if (argv[0] === "github-evidence") return runGitHubEvidence(argv);
+  if (argv[0] === "cost-evidence") return runCostEvidence(argv);
   if (argv[0] === "value") return runValue(argv);
   if (argv[0] === "compare-value") return runCompareValue(argv);
   if (argv[0] === "audit") return runAudit(argv);
@@ -1640,7 +1998,11 @@ function isMainModule(): boolean {
 
 if (isMainModule()) {
   const argv = process.argv.slice(2);
-  if (argv[0] === "pr-receipt") {
+  if (argv[0] === "guard-observer") {
+    void runGuardObserverCommand(argv.slice(1)).then((code) => process.exit(code));
+  } else if (argv[0] === "guard-deploy-register") {
+    void runGuardDeployRegisterCommand(argv.slice(1)).then((code) => process.exit(code));
+  } else if (argv[0] === "pr-receipt") {
     void runPublicPrReceiptCommand(argv.slice(1), { toolVersion: VERSION }).then((code) => process.exit(code));
   } else if (argv[0] === "check") {
     const pin = defaultActionPin();
@@ -1649,5 +2011,7 @@ if (isMainModule()) {
       process.exit(2);
     }
     void runPublicPrReceiptCommand(argv.slice(1), { toolVersion: VERSION, toolCommit: pin.sha }).then((code) => process.exit(code));
+  } else if (argv[0] === "run") {
+    void runProtectedRunCommand(argv.slice(1)).then((code) => process.exit(code));
   } else process.exit(run(argv));
 }

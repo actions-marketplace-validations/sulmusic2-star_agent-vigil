@@ -1,0 +1,38 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "agent-vigil-public-app",
+  "main": "src/index.mjs",
+  "compatibility_date": "2026-09-01",
+  "compatibility_flags": ["nodejs_compat"],
+  "vars": {
+    "CONTROL_REPOSITORY": "sulmusic2-star/agent-vigil",
+    "CONTROL_WORKFLOW": "public-app-gate.yml",
+    "CONTROL_REF": "main"
+  },
+  "env": {
+    "staging": {
+      "vars": {
+        "CONTROL_REPOSITORY": "sulmusic2-star/agent-vigil",
+        "CONTROL_WORKFLOW": "public-app-gate.yml",
+        "CONTROL_REF": "main"
+      },
+      "durable_objects": {
+        "bindings": [
+          { "name": "DELIVERY_LEDGER", "class_name": "DeliveryLedger" },
+          { "name": "DEPLOYMENT_AUTHORIZATIONS", "class_name": "DeploymentAuthorizationLedger" }
+        ]
+      }
+    }
+  },
+  "durable_objects": {
+    "bindings": [
+      { "name": "DELIVERY_LEDGER", "class_name": "DeliveryLedger" },
+      { "name": "DEPLOYMENT_AUTHORIZATIONS", "class_name": "DeploymentAuthorizationLedger" }
+    ]
+  },
+  "migrations": [
+    { "tag": "v1", "new_sqlite_classes": ["DeliveryLedger"] },
+    { "tag": "v2", "new_sqlite_classes": ["DeploymentAuthorizationLedger"] }
+  ],
+  "observability": { "enabled": true, "head_sampling_rate": 1 }
+}

@@ -39,18 +39,21 @@ trusted-publishing path. Configure the npm package with these exact values:
 - environment: `npm-publish`, restricted in GitHub to protected release tags;
 - allowed action: `npm stage publish` only; disable direct `npm publish`.
 
-The workflow runs only when a stable GitHub release is published. After an
-ambiguous staging failure, inspect npm's staged-package queue before rerunning;
-rerun the same release workflow only when that exact version is absent. There
-is no branch-selectable manual staging trigger. The workflow checks out the
-release event's exact commit, requires the package version to match, runs the
-release checks, and compares package integrity before accepting an
-already-published version. For a previously unpublished version, successful
-workflow completion means the package is staged, not public. Review the staged
-metadata and tarball, then approve it separately with 2FA. A matching version
-that is already public is reported as a no-op. After npm promotion and
-publish-time scanning complete, verify the public registry integrity and
-consumer path below.
+Pushing a stable `vMAJOR.MINOR.PATCH` tag stages npm before the GitHub release
+is made public. The workflow bytes come from that immutable tag, not a
+branch-selectable manual trigger. It verifies that the tag resolves to its
+event commit, that the commit is contained in the repository's default branch,
+and that the package version matches the tag. It then runs the release checks
+and compares package integrity before accepting an already-published version.
+
+For a previously unpublished version, successful workflow completion means the
+package is staged, not public. Review the staged metadata and tarball, then
+approve it separately with 2FA. Verify npm integrity and a clean consumer run
+before publishing the matching GitHub release. After an ambiguous staging
+failure, inspect npm's staged-package queue before rerunning the tag workflow;
+a matching public npm version is reported as a no-op. Publishing the GitHub
+release does not stage npm again. There is no branch-selectable manual staging
+trigger.
 
 Agent Vigil declares npm's `dual-use` content class because it is a defensive
 security utility with command-inspection and controlled-execution features.
@@ -58,13 +61,13 @@ The root `DISCLOSURE` file and `package.json` declaration must remain present in
 every later package version unless npm Trust & Safety approves their removal.
 
 Verify each release independently. The current public registry identity is
-v0.21.1; do not substitute an unpublished source-candidate version:
+v0.24.4; do not substitute an unpublished source-candidate version:
 
 ```bash
 npm whoami
 npm view @sulmusic/agent-vigil version dist-tags.latest
-npm view @sulmusic/agent-vigil@0.21.1 dist.integrity
-npx --yes @sulmusic/agent-vigil@0.21.1 doctor
+npm view @sulmusic/agent-vigil@0.24.4 dist.integrity
+npx --yes --package=@sulmusic/agent-vigil@0.24.4 agent-vigil doctor
 ```
 
 The canonical npm name is scoped because npm rejected the unscoped

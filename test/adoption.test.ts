@@ -981,7 +981,7 @@ test("doctor fails unsafe candidate privilege, checkout, isolation, and mutable-
     .replace("  pull-requests: read\n", "  pull-requests: read\n  id-token: write\n")
     .replace("        with:\n          transcript:", "        with:\n          attest: true\n          github-token: ${{ github.token }}\n          transcript:");
   const unsafeOutcome = readFileSync(outcomePath, "utf8")
-    .replace(/actions\/download-artifact@[0-9a-f]{40}/, "actions/download-artifact@v5")
+    .replace(/actions\/download-artifact@[0-9a-f]{40}/, "actions/download-artifact@v8")
     .replace("  pull-requests: read\n", "  pull-requests: read\n  contents: write\n");
   writeFileSync(evidencePath, unsafeEvidence);
   writeFileSync(outcomePath, unsafeOutcome);
@@ -1230,6 +1230,7 @@ test("failure output includes a concrete remediation", () => {
     policy: { minVerified: 1, strict: true, sha256: `sha256:${"2".repeat(64)}` },
   });
   const rendered = renderMarkdown(report);
-  assert.match(rendered, /Checks that need attention/);
+  assert.match(rendered, /Agent Vigil: FAIL/);
+  assert.match(rendered, /\*\*Reason:\*\* test suite/);
   assert.match(rendered, /Run `vigil doctor`/);
 });

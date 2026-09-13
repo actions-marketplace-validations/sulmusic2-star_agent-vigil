@@ -7,14 +7,23 @@ import { join } from "node:path";
 
 const read = (path: string) => readFileSync(new URL(`../${path}`, import.meta.url), "utf8");
 
-test("the public entry point leads with a no-account PR check and keeps trial registration optional", () => {
+test("the public entry point gives one install path, one result, and an honest App boundary", () => {
   const readme = read("README.md");
   const form = read(".github/ISSUE_TEMPLATE/adopter-feedback.yml");
-  assert.match(readme, /Agent Vigil is a required GitHub check for pull requests made with coding agents/);
-  assert.match(readme, /Paste a public pull-request URL.*No login, token, repository write, or source upload/s);
-  assert.match(readme, /Plain Git repositories and other\s+toolchains use an explicit hermetic runner and an explicit test command/s);
+  assert.match(readme, /Agent Vigil is an independent merge check for AI-assisted pull requests/);
+  const publicInstall = "https://sulmusic2-star.github.io/agent-vigil/#install";
+  assert.ok(readme.includes(publicInstall));
+  assert.ok(readme.indexOf(publicInstall) < readme.indexOf("### Install this exact package"));
+  assert.match(readme, /npx --yes --package=\.\/sulmusic-agent-vigil-0\.25\.0\.tgz agent-vigil protect --repo \./);
+  assert.doesNotMatch(readme, /@sulmusic\/agent-vigil/);
+  assert.match(readme, /Availability is not implied/);
+  assert.doesNotMatch(readme, /source release candidate/);
+  assert.match(readme, /same\s+package version selected above/s);
+  assert.match(readme, /open one setup\s+pull request.*read\s+one result/s);
+  assert.match(readme, /\*\*PASS\*\*.*\*\*FAIL\*\*.*\*\*NOT CHECKED\*\*/s);
+  assert.match(readme, /does not make the production App a live public service or prove outside use/);
   assert.match(readme, /--runner common/);
-  assert.match(readme, /optionally.*register a trial/s);
+  assert.doesNotMatch(readme, /register a trial|adoption experiment/i);
   assert.match(form, /Opening this form does not count as an installation/);
   assert.match(form, /workflow that actually uses Agent Vigil/);
   assert.match(form, /required job name by itself does not count/);

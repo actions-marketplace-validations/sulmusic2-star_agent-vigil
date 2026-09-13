@@ -216,6 +216,7 @@ test("npm package surface excludes internal product and commercial working docum
     "docs/PUBLISHING.md",
     "docs/RESEARCH.md",
     "docs/research",
+    "docs/index.html",
   ];
   for (const internalPath of internalPaths) {
     assert.ok(
@@ -228,6 +229,8 @@ test("npm package surface excludes internal product and commercial working docum
     "docs/60_SECOND_DEMO.md",
     "docs/ADOPTION_EVIDENCE.md",
     "docs/AGENT_VALUE_CARD.md",
+    "docs/AGENT_CONTROL_ADMISSION.md",
+    "docs/AGENT_CONTROL_RELEASE_GATE_RUNBOOK.md",
     "docs/AI_CHANGE_EPISODE_V1.md",
     "docs/AI_CHANGE_RECEIPT.md",
     "docs/assets/outcome-verifier-demo.html",
@@ -240,6 +243,7 @@ test("npm package surface excludes internal product and commercial working docum
     "docs/CONTINUITY_LAB.md",
     "docs/CONTINUITY_STAPLE.md",
     "docs/CONTROL_PROOF.md",
+    "docs/EXACT_COST_EVIDENCE.md",
     "docs/GITHUB_MARKER.md",
     "docs/GITHUB_OUTCOME_EVIDENCE.md",
     "docs/GUARD_COMPATIBILITY.md",
@@ -255,10 +259,12 @@ test("npm package surface excludes internal product and commercial working docum
     "docs/HOSTED_OUTCOME_PRICING.md",
     "docs/OUTCOME_MANDATES.md",
     "docs/PROOF_COMMENT.md",
+    "docs/PROTECTED_RUN.md",
     "docs/PUBLIC_PR_RECEIPT.md",
     "docs/PUBLIC_RELEASE_POLICY.md",
     "docs/RECEIPT_DELTAS.md",
     "docs/RECEIPTS.md",
+    "docs/RUN_AUTOPSY.md",
     "docs/TERRAFORM_PLAN_GATE.md",
     "docs/TEST_INTEGRITY_GUARD.md",
     "docs/THREAT_MODEL.md",
@@ -286,15 +292,28 @@ test("npm package surface excludes internal product and commercial working docum
     "docs/control-status-v1.schema.json",
     "docs/continuity-staple-v1.schema.json",
     "docs/guard-compatibility-v1.schema.json",
-    "docs/index.html",
+    "docs/guard-environment-binding-v1.schema.json",
+    "docs/guard-environment-v1.schema.json",
+    "docs/guard-policy-files-v1.schema.json",
+    "docs/guard-route-envelope-v1.schema.json",
+    "docs/guard-route-diff-v1.schema.json",
+    "docs/guard-control-challenge-v1.schema.json",
+    "docs/guard-control-observation-v1.schema.json",
+    "docs/guard-control-isolation-v1.schema.json",
+    "docs/guard-control-admission-v1.schema.json",
+    "docs/guard-deployment-authorization-v1.schema.json",
+    "docs/guard-deployment-registration-v1.schema.json",
     "docs/live-host-route-v1.schema.json",
+    "docs/live-host-route-v2.schema.json",
     "docs/notary-app-manifest.example.json",
     "docs/policy.schema.json",
     "docs/portable-receipt-v1.schema.json",
     "docs/public-pr-receipt-v1.schema.json",
+    "docs/protected-run-v1.schema.json",
     "docs/outcome-mandate-v0.1.schema.json",
     "docs/outcome-receipt-v0.1.schema.json",
     "docs/receipt-v2.schema.json",
+    "docs/run-autopsy-v1.schema.json",
     "docs/signed-control-proof-v1.schema.json",
     "docs/upgrade-canary-v1.schema.json",
     "docs/upgrade-config-v1.schema.json",
@@ -308,6 +327,7 @@ test("npm package surface excludes internal product and commercial working docum
   ];
   const allowedPublishedWorkflows = [
     ".github/workflows/agent-vigil-merge-group.yml",
+    ".github/workflows/public-app-gate.yml",
   ];
   const allowedPublishedHostedTests = [
     "test-hosted/merge-queue-dispatcher.test.ts",
@@ -332,6 +352,7 @@ test("npm package surface excludes internal product and commercial working docum
   const packedPaths = packedPackagePaths();
   assert.equal(new Set(packedPaths).size, packedPaths.length, "npm pack manifest paths must be unique");
   assert.ok(packedPaths.includes("DISCLOSURE"), "DISCLOSURE must be at the root of the concrete npm package");
+  assert.ok(packedPaths.includes("dist/run-telemetry-worker.js"), "the protected-run telemetry worker must ship with the CLI");
   for (const packedPath of packedPaths) {
     assert.ok(
       packedPath === "package.json" || files.some((entry) => manifestEntryCoversPath(entry, packedPath)),
@@ -389,6 +410,8 @@ test("repository protection runs one direct offline test contract after bounded 
   assert.ok((policy.maintainer?.protectedPaths as string[]).includes(".agent-vigil.json"));
   assert.ok((policy.maintainer?.protectedPaths as string[]).includes(".github/workflows/**"));
   assert.ok((policy.maintainer?.protectedPaths as string[]).includes("dist/cli.js"));
+  assert.ok((policy.maintainer?.protectedPaths as string[]).includes("dist/run-telemetry-worker.js"));
+  assert.ok((policy.maintainer?.protectedPaths as string[]).includes("scripts/build_cli.mjs"));
   assert.ok((policy.maintainer?.protectedPaths as string[]).includes("test/package-surface.test.ts"));
 });
 
@@ -434,6 +457,33 @@ test("candidate CI never masquerades as trusted Agent Vigil evidence", () => {
   assert.match(ci, /AGENT_VIGIL_REQUIRE_REAL_DOCKER:\s*"true"/);
   assert.match(ci, /node@sha256:[0-9a-f]{64}/);
   assert.match(ci, /docker image inspect/);
+  assert.match(ci, /Run protected group regression under a non-reaping PID 1/);
+  assert.match(ci, /docker exec --env AGENT_VIGIL_REQUIRE_LINUX_THREAD_FIXTURE=true "\$container"/);
+  assert.match(ci, /a zombie process leader cannot hide a runnable worker thread/);
+  const containmentPattern = ci.match(/--test-name-pattern="([^"]+)"/)?.[1];
+  assert.ok(containmentPattern, "candidate CI declares its focused Linux containment pattern");
+  const containmentNames = containmentPattern.split("|");
+  assert.deepEqual([...containmentNames].sort(), [
+    "wall limit terminates an ordinary descendant",
+    "a leader cannot leave an ordinary same-group descendant",
+    "a zombie process leader cannot hide a runnable worker thread",
+    "changing Linux task membership is not accepted as zombie-only",
+    "hidepid-inaccessible processes require a stable pre-launch identity",
+  ].sort(), "candidate CI must retain every required containment test exactly once");
+  const runSupervisorTests = readFileSync(new URL("run-supervisor.test.ts", import.meta.url), "utf8");
+  const runSupervisorTestNames = [...runSupervisorTests.matchAll(/(?:nodeTest|test)\("([^"]+)"/g)]
+    .map((match) => match[1]);
+  for (const pattern of containmentNames) {
+    assert.ok(
+      runSupervisorTestNames.some((name) => new RegExp(pattern).test(name)),
+      `candidate CI containment pattern matches no test: ${pattern}`,
+    );
+  }
+  assert.match(
+    ci,
+    /- name: Exercise the packed package\n\s+if: matrix\.node == 20 \|\| matrix\.node == 22\n\s+run: npm run test:package/,
+    "the minimum supported Node runtime exercises the generated package worker",
+  );
   const portability = ci.match(/\n  portability:\n([\s\S]*?)(?=\n  [a-z][a-z-]*:\n)/)?.[1];
   assert.ok(portability, "candidate CI retains its portability job");
   const textContract = portability.indexOf("git config --global core.autocrlf false");
@@ -454,6 +504,7 @@ test("workflow permissions and privileged steps are exact fail-closed contracts"
     "cross-corpus-benchmark.yml": ["contents:read"],
     "publish-hermetic-runner.yml": ["contents:read", "packages:write"],
     "publish.yml": [],
+    "public-app-gate.yml": ["contents:read"],
   };
   const expectedEffectiveJobPermissions: Record<string, string[]> = {
     "adoption-census.yml:census": ["contents:read"],
@@ -482,23 +533,26 @@ test("workflow permissions and privileged steps are exact fail-closed contracts"
     "publish-hermetic-runner.yml:publish": ["contents:read", "packages:write"],
     "publish.yml:publish": ["actions:read", "id-token:write"],
     "publish.yml:verify-and-pack": ["contents:read"],
+    "public-app-gate.yml:authenticate": ["contents:read"],
+    "public-app-gate.yml:evidence": ["contents:read"],
+    "public-app-gate.yml:publish": ["contents:read"],
   };
   const expectedPrivilegedSteps: Record<string, string[]> = {
     "control-proof-weekly.yml:attest-proof": [
-      "uses=actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0|64b4f35dc6780d7f02680763767ffd7d41558dd154caa597dfab69172ebf9e8e",
+      "uses=actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c|bf822b38701dd09f7c5bcb7c2ec4efb99e526aa4c3ff31038c16261e2fb8a4ac",
       "run|65e96cd6e94e1883dae07be73530634729c027b30e27ab8af34eaf932bf2734f",
       "uses=actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6|c9cc1d7163a258c94d57165041142cf6f605c61b17d49ec16581ad0a9be84dd9",
-      "uses=actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02|16faa1e3dec4a01308913952efc4fea320aaf88c4b41d614d2633dfff71238ca",
+      "uses=actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a|8a5e599e3822df9dbf0ff8b046d797e1697aca81a7222c23537bab51f36276fc",
     ],
     "publish.yml:publish": [
       "uses=actions/setup-node@820762786026740c76f36085b0efc47a31fe5020|67e07e2dfa04f8a7834dbd56f20be3c32ae679f3b5b9f0ce3476c9864f72a265",
-      "uses=actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0|72a8e30d016a37162721c9d6a45a2d0594c127a2b8b2cf6ed3c5ee1fab47ad2b",
-      "run|6a3fc2091941a6b4077a05ca2f5a7effe72080ad94059dd62b01dc4f7c307bc3",
+      "uses=actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c|fad9d9403104d0f5f632658b2955f9aff9a4b579c22bfaa43daa58a27cdf6b0f",
+      "run|e31d77739bfdb506f1376095aa907f5218db62499f504f1ef40d816c4af661e1",
     ],
   };
   const expectedPrivilegedWorkflowDigests: Record<string, string> = {
-    "control-proof-weekly.yml": "0786e8a544d99c96cb2c34aaf6fde7f1f6113c4350197c022080499f238e6a2e",
-    "publish.yml": "a21f00af3e351ca29098ac6f8c4f72d4fcd925a00c6f858f933a9e59bf265005",
+    "control-proof-weekly.yml": "1041b9482f37f9ed28d6919bc62b35d8c3eb2a4267055b111f166c82bb6a2f55",
+    "publish.yml": "42717f1fd22395db0c7bae200161430ae12639032b4fc3379994443bb1ca54af",
   };
 
   const workflows = workflowSources();
@@ -565,12 +619,17 @@ test("privileged workflows bind event identity and validate bounded artifacts", 
   const publish = readFileSync(new URL("../.github/workflows/publish.yml", import.meta.url), "utf8");
   const controlProof = readFileSync(new URL("../.github/workflows/control-proof-weekly.yml", import.meta.url), "utf8");
 
-  assert.equal(
-    (publish.match(/github\.ref == format\('refs\/tags\/\{0\}'/g) ?? []).length,
-    2,
-    "both publish jobs must bind the release event to its selected tag ref",
-  );
+  assert.doesNotMatch(publish, /^  release:/m, "npm staging must precede the public GitHub release");
   assert.doesNotMatch(publish, /workflow_dispatch/, "publishing must not execute branch-selected workflow bytes");
+  assert.match(publish, /^  push:\n    tags:\n      - "v\[0-9\]\+\.\[0-9\]\+\.\[0-9\]\+"$/m);
+  assert.equal(
+    (publish.match(/github\.event_name == 'push'/g) ?? []).length,
+    2,
+    "both jobs must require the immutable stable-tag push used to stage npm before the public GitHub release",
+  );
+  assert.equal((publish.match(/github\.ref_type == 'tag'/g) ?? []).length, 2);
+  assert.equal((publish.match(/startsWith\(github\.ref, 'refs\/tags\/v'\)/g) ?? []).length, 2);
+  assert.match(publish, /git merge-base --is-ancestor "\$GITHUB_SHA" "refs\/remotes\/origin\/\$DEFAULT_BRANCH"/);
   assert.match(publish, /ref:\s*\$\{\{ github\.sha \}\}/);
   assert.doesNotMatch(publish, /ref:\s*\$\{\{ steps\.release\.outputs\.tag \}\}/);
   assert.match(publish, /^\s{4}environment:\s*npm-publish\s*$/m);
@@ -747,21 +806,24 @@ test("trusted PR evidence and outcome observation retain separate least-privileg
   assert.doesNotMatch(outcome, /attest:\s*true|id-token:\s*write|attestations:\s*write|artifact-metadata:\s*write/);
 });
 
-test("README Action example preserves the fresh exact-runtime topology", () => {
+test("README keeps first use simple and delegates the low-level Action contract", () => {
   const readme = readFileSync(new URL("../README.md", import.meta.url), "utf8");
-  const start = readme.indexOf("## GitHub Action");
-  const end = readme.indexOf("\n## ", start + 1);
-  assert.ok(start >= 0);
-  const section = readme.slice(start, end < 0 ? undefined : end);
-  assert.match(section, /actions\/setup-node@820762786026740c76f36085b0efc47a31fe5020/);
-  assert.match(section, /node-version:\s*22\.23\.2/);
-  assert.match(section, /package-manager-cache:\s*false/);
-  assert.doesNotMatch(section, /^\s*node-version:\s*22\s*$/m);
-  assert.ok(section.indexOf("actions/setup-node@") < section.indexOf("actions/checkout@"));
-  assert.ok(section.indexOf("actions/setup-node@") < section.indexOf("sulmusic2-star/agent-vigil@"));
-  assert.match(section, /first executable step in a fresh hosted job/);
-  assert.match(section, /do not run untrusted code before it or carry forward a surviving untrusted\s+process/);
-  assert.match(section, /hosted security contract/);
+  assert.match(readme, /## Add it to a repository/);
+  assert.match(readme, /PASS[\s\S]*FAIL[\s\S]*NOT CHECKED/);
+  assert.match(readme, /hosted security contract/);
+  assert.doesNotMatch(readme, /## GitHub Action/);
+  assert.doesNotMatch(readme, /actions\/setup-node@|package-manager-cache:/);
+});
+
+test("the concise README points to the exact hosted-runtime security contract", () => {
+  const readme = readFileSync(new URL("../README.md", import.meta.url), "utf8");
+  const contract = readFileSync(new URL("../docs/HOSTED_SECURITY_CONTRACT.md", import.meta.url), "utf8");
+  assert.match(readme, /\[hosted security contract\]\(docs\/HOSTED_SECURITY_CONTRACT\.md\)/);
+  assert.match(contract, /actions\/setup-node@820762786026740c76f36085b0efc47a31fe5020|commit-pinned `setup-node` Action/);
+  assert.match(contract, /Node\.js `22\.23\.2`/);
+  assert.match(contract, /package-manager-cache:\s*false|no ambient or system Node fallback/);
+  assert.match(contract, /fresh GitHub-hosted job with no prior untrusted step/);
+  assert.match(contract, /must not execute repository code, package lifecycle scripts, or another\s+untrusted process before Agent Vigil/);
 });
 
 test("reviewed self pin and source-dist identity are a visible release gate", (context) => {
@@ -770,7 +832,7 @@ test("reviewed self pin and source-dist identity are a visible release gate", (c
     .filter((reference) => reference.startsWith("sulmusic2-star/agent-vigil@"))
     .map((reference) => reference.slice(reference.indexOf("@") + 1));
 
-  assert.equal(selfReferences.length, 4, "pull-request evidence, merge-queue evidence, outcomes, and weekly proof must each use the reviewed runtime once");
+  assert.equal(selfReferences.length, 5, "pull-request evidence, merge-queue evidence, outcomes, weekly proof, and the public App gate must each use the reviewed runtime once");
   if (selfReferences.every((reference) => reference === REVIEWED_RUNTIME_PLACEHOLDER)) {
     context.todo("replace REVIEWED_40_HEX_AGENT_VIGIL_COMMIT with the frozen reviewed runtime commit before release");
     return;
@@ -781,21 +843,34 @@ test("reviewed self pin and source-dist identity are a visible release gate", (c
   const runtimeCommit = selfReferences[0];
   execFileSync("git", ["cat-file", "-e", `${runtimeCommit}^{commit}`], { cwd: ROOT, stdio: "pipe" });
   execFileSync("git", ["merge-base", "--is-ancestor", runtimeCommit, "HEAD"], { cwd: ROOT, stdio: "pipe" });
-  execFileSync("git", ["diff", "--quiet", runtimeCommit, "--", "action.yml", "src", "dist/cli.js"], { cwd: ROOT, stdio: "pipe" });
+  execFileSync("git", [
+    "diff", "--quiet", runtimeCommit, "--",
+    "action.yml", "src", "dist/cli.js", "dist/run-telemetry-worker.js", "scripts/build_cli.mjs", "package.json",
+  ], { cwd: ROOT, stdio: "pipe" });
 
   const temporary = mkdtempSync(join(tmpdir(), "agent-vigil-package-surface-"));
-  const rebuilt = join(temporary, "cli.js");
   buildSync({
-    entryPoints: [join(ROOT, "src", "cli.ts")],
+    entryPoints: {
+      cli: join(ROOT, "src", "cli.ts"),
+      "run-telemetry-worker": join(ROOT, "src", "run-telemetry-worker.ts"),
+    },
     bundle: true,
     platform: "node",
     format: "esm",
     target: "node20",
-    outfile: rebuilt,
+    outdir: temporary,
+    entryNames: "[name]",
+    define: { __AGENT_VIGIL_BUILD_SHA__: JSON.stringify("") },
     logLevel: "silent",
   });
   const sha256 = (path: string) => createHash("sha256").update(readFileSync(path)).digest("hex");
-  assert.equal(sha256(join(ROOT, "dist", "cli.js")), sha256(rebuilt), "dist/cli.js must be the deterministic bundle of the pinned source");
+  for (const filename of ["cli.js", "run-telemetry-worker.js"]) {
+    assert.equal(
+      sha256(join(ROOT, "dist", filename)),
+      sha256(join(temporary, filename)),
+      `dist/${filename} must be the deterministic bundle of the pinned source`,
+    );
+  }
 });
 
 test("CodeQL scans maintained source while excluding deterministic bundles and hostile fixtures", () => {

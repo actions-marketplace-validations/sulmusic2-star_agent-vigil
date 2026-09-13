@@ -132,7 +132,7 @@ test("receipt-bound advisories do not alter PASS and do alter the receipt hash",
   const warned = buildReport({ ...input, advisories: [advisory] });
   assert.equal(warned.summary.status, "PASS");
   assert.notEqual(warned.receiptHash, plain.receiptHash);
-  assert.match(renderText(warned), /non-blocking under this policy/);
+  assert.match(renderText(warned), /Review notes 1/);
   assert.equal(toSarif(warned).runs[0].results[0].level, "warning");
 });
 test("integrity routing preserves hard context errors and makes heuristic contradictions policy-selectable", () => {
@@ -536,6 +536,67 @@ test("static diff audit rejects quoted path headers it cannot bind exactly", () 
   assert.equal(result.blocksPass, true);
 });
 
+test("static diff audit accepts an exactly bound content-changing rename", () => {
+  const results = checkIntegrityDiff([
+    "diff --git a/src/refactor.ts b/src/refactored.ts",
+    "similarity index 88%",
+    "rename from src/refactor.ts",
+    "rename to src/refactored.ts",
+    "--- a/src/refactor.ts",
+    "+++ b/src/refactored.ts",
+    "@@ -1,2 +1,2 @@",
+    "-export function compute(x: number) { return x; }",
+    "+export function computeV2(x: number) { return x; }",
+    " export const wired = compute(1);",
+    "",
+  ].join("\n"));
+  assert.equal(results.some((result) => result.ruleId === "diff-unparseable"), false);
+  assert.ok(results.some((result) => result.ruleId === "stale-refactor-caller"));
+});
+
+test("static diff audit rejects ambiguous or unsupported rename metadata", () => {
+  const base = [
+    "diff --git a/src/refactor.ts b/src/refactored.ts",
+    "similarity index 88%",
+    "rename from src/refactor.ts",
+    "rename to src/refactored.ts",
+    "--- a/src/refactor.ts",
+    "+++ b/src/refactored.ts",
+    "@@ -1 +1 @@",
+    "-return oldValue;",
+    "+return newValue;",
+    "",
+  ];
+  const mismatched = [...base];
+  mismatched[3] = "rename to src/other.ts";
+  const quoted = [...base];
+  quoted[2] = 'rename from "src/refactor.ts"';
+  const copied = [...base];
+  copied[2] = "copy from src/refactor.ts";
+  for (const diff of [mismatched, quoted, copied]) {
+    const result = checkIntegrityDiff(diff.join("\n"))[0];
+    assert.equal(result.ruleId, "diff-unparseable");
+    assert.equal(result.blocksPass, true);
+  }
+});
+
+test("static diff audit keeps completed text findings when a later binary patch is unreadable", () => {
+  const plantedDeadBranch = `if (${"false"}) return fallback;`;
+  const results = checkIntegrityDiff([
+    unifiedDiff("src/value.ts", ["return value;"], [plantedDeadBranch, "return value;"]),
+    "diff --git a/assets/value.db b/assets/value.db",
+    "deleted file mode 100644",
+    "index 1111111..0000000",
+    "Binary files a/assets/value.db and /dev/null differ",
+    "",
+  ].join("\n"));
+  const unreadable = results.find((result) => result.ruleId === "diff-unparseable");
+  assert.equal(unreadable?.verdict, "unverifiable");
+  assert.equal(unreadable?.blocksPass, true);
+  assert.ok(results.some((result) => result.ruleId === "dead-branch-added" && result.verdict === "contradicted"));
+  assert.equal(results.some((result) => result.verdict === "verified"), false);
+});
+
 test("static diff audit rejects malformed, under-counted, and truncated hunks", () => {
   const clean = unifiedDiff("src/clean.ts", ["return 1;"], ["return 2;"]);
   const malformed = [
@@ -645,6 +706,20 @@ test("static diff audit catches error swallowing, lost context, dead branches, s
   }
 });
 
+test("static diff audit ignores generated maps and nested vendored code", () => {
+  const generated = [
+    unifiedDiff("packages/app/output/runtime.js.map", [], ["// @ts-ignore generated source map text"]),
+    unifiedDiff("packages/sdk/src/vendored/client.ts", [], ["// eslint-disable-next-line no-console"]),
+  ].join("");
+  const rules = checkIntegrityDiff(generated).map((result) => result.ruleId);
+  assert.equal(rules.includes("suppression-added"), false);
+});
+
+test("static diff audit does not hide source merely because a parent directory is named build", () => {
+  const source = unifiedDiff("packages/build/runner.ts", [], ["// @ts-ignore unsafe suppression"]);
+  assert.equal(checkIntegrityDiff(source).some((result) => result.ruleId === "suppression-added"), true);
+});
+
 test("static diff audit treats in-hunk triple-prefix lines as code rather than file headers", () => {
   const addedPrefixCollision = unifiedDiff(
     "src/counter.ts",
@@ -681,6 +756,41 @@ test("static diff audit recognizes Cypress tests and catches removed assertions"
     ["cy.wait(1000);"],
   );
   assert.ok(checkIntegrityDiff(diff).some((result) => result.ruleId === "assertion-drop"));
+});
+test("static diff audit does not call an assertion move a net assertion drop", () => {
+  const moved = [
+    unifiedDiff("test/old.test.ts", ["expect(value()).toBe(2);"], []),
+    unifiedDiff("test/new.test.ts", [], ["expect(value()).toBe(2);"]),
+  ].join("");
+  assert.equal(checkIntegrityDiff(moved).some((result) => result.ruleId === "assertion-drop"), false);
+});
+test("static diff audit reports one test-surface loss when tests and assertions both shrink", () => {
+  const reduced = unifiedDiff(
+    "test/value.test.ts",
+    [
+      "test('first', () => { expect(first()).toBe(1); });",
+      "test('second', () => { expect(second()).toBe(2); });",
+    ],
+    ["test('first', () => { expect(first()).toBe(1); });"],
+  );
+  const findings = checkIntegrityDiff(reduced);
+  assert.equal(findings.filter((result) => result.ruleId === "test-count-drop").length, 1);
+  assert.equal(findings.filter((result) => result.ruleId === "assertion-drop").length, 0);
+});
+test("static diff audit catches a retained test body emptied of assertions", () => {
+  const emptied = [
+    "diff --git a/test/value.test.ts b/test/value.test.ts",
+    "--- a/test/value.test.ts",
+    "+++ b/test/value.test.ts",
+    "@@ -1,5 +1,2 @@",
+    " it('checks value', () => {",
+    "-  expect(value().a).toBe(1);",
+    "-  expect(value().b).toBe(2);",
+    "-  expect(value().c).toBe(3);",
+    " });",
+    "",
+  ].join("\n");
+  assert.ok(checkIntegrityDiff(emptied).some((result) => result.ruleId === "assertion-drop"));
 });
 test("static diff audit catches cross-file stale callers with a clean negative control", () => {
   const declaration = unifiedDiff(

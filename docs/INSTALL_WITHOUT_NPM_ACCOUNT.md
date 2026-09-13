@@ -1,160 +1,91 @@
-# Install Agent Vigil in five minutes
+# Install Agent Vigil v0.25.0 without npm
 
-An npm sign-in is not required. The latest verified GitHub package is v0.23.2.
-The npm registry separately reports public version 0.21.1; v0.23.2 is staged
-there but is not yet publicly installable from npm.
+For the currently available release, use the
+[public installation page](https://sulmusic2-star.github.io/agent-vigil/#install).
 
-## Prepare and verify the repository gate
+This guide describes the v0.25.0 package. Check its release page and checksum
+before installation. A missing download or failed checksum must stop the install.
+Availability is not implied. Use the public installation page if these assets are unavailable.
 
-Run these commands from the root of a Git repository. Agent Vigil can infer a
-bounded direct Node test command such as `node --test test/*.test.js`; other
-toolchains require an explicit hermetic runner and test command:
+## Verify the GitHub package
+
+Open the [v0.25.0 release page](https://github.com/sulmusic2-star/agent-vigil/releases/tag/v0.25.0). Do not continue unless it contains both
+`sulmusic-agent-vigil-0.25.0.tgz` and
+`sulmusic-agent-vigil-0.25.0.tgz.sha256`.
 
 ```bash
-AGENT_VIGIL_PACKAGE=https://github.com/sulmusic2-star/agent-vigil/releases/download/v0.23.2/sulmusic-agent-vigil-0.23.2.tgz
-
-npx --yes "$AGENT_VIGIL_PACKAGE" protect
-
-git status --short
+curl -fLO \
+  https://github.com/sulmusic2-star/agent-vigil/releases/download/v0.25.0/sulmusic-agent-vigil-0.25.0.tgz && \
+curl -fLO \
+  https://github.com/sulmusic2-star/agent-vigil/releases/download/v0.25.0/sulmusic-agent-vigil-0.25.0.tgz.sha256 && \
+shasum -a 256 -c sulmusic-agent-vigil-0.25.0.tgz.sha256 && \
+npx --yes --package=./sulmusic-agent-vigil-0.25.0.tgz agent-vigil protect --repo .
 ```
 
-The inferred v0.23.2 Node/npm path accepts this deliberately narrow test shape. It does
-not execute npm wrappers or infer a protected test command in a repository
-without a root `package.json`. If no safe direct command can be inferred,
-`protect` leaves `REPLACE_WITH_TEST_COMMAND` in the prepared policy and
-`doctor` fails closed instead of claiming the gate is ready.
+Keep the verified archive and its checksum file for the follow-up check. Both
+steps use this same immutable v0.25.0 GitHub package, without npm publication.
+Keep these downloaded files out of your Git commits.
 
-For Python, Rust, Go, Java, Ruby, PHP, .NET, pnpm, Yarn, Bun, or another
-non-inferred layout, select the immutable common runner and provide the bounded
-test command yourself:
+## One setup pull request
+
+`protect` writes the policy and workflows, then runs a disposable rehearsal.
+Review the generated files, commit them, and open one setup pull request. After
+that setup merges, run this local command. It remains usable if npm removes the
+cached CLI path in the printed command. Printed commands use the local runtime;
+on Windows, run those commands in PowerShell.
 
 ```bash
-npx --yes "$AGENT_VIGIL_PACKAGE" protect --repo . \
+npx --yes --package=./sulmusic-agent-vigil-0.25.0.tgz agent-vigil doctor --repo .
+```
+
+Then open a normal code pull request. The check says:
+
+- `PASS` — ready to merge under the base-owned policy;
+- `FAIL` — do not merge yet;
+- `NOT CHECKED` — no decision because required evidence did not run or could
+  not be bound to the current commit.
+
+## Non-Node repositories
+
+The automatic path recognizes a narrow root Node/npm layout. Other toolchains
+use the immutable common runner and an explicit command:
+
+```bash
+npx --yes --package=./sulmusic-agent-vigil-0.25.0.tgz agent-vigil protect --repo . \
   --runner common \
   --test-cmd "python3 -m pytest -q"
 ```
 
-The common image contains the toolchains, not your project dependencies. Test
-execution remains networkless. Use `--runner-image` with an organization-owned
-digest-pinned image when dependencies must be preinstalled.
+The common image contains Node, Python, Rust, Go, Java, Ruby, PHP, .NET, pnpm,
+Yarn, and Bun. It does not fetch project dependencies during the networkless
+test phase. Use a reviewed organization-owned `--runner-image` when the project
+needs dependencies preinstalled.
 
-Review the generated controls before committing them. An explicit hermetic
-runner adds the fifth file shown below:
+## If you prefer npm
 
-```text
-.agent-vigil.json
-.agent-vigil-runner.json (only with --runner or --runner-image)
-.github/pull_request_template.md
-.github/workflows/agent-vigil.yml
-.github/workflows/agent-vigil-outcomes.yml
-```
+Use the public installation page for its verified npm command. An available
+GitHub download does not establish npm availability, and a source version does
+not establish either. The current channel record lives
+on the default branch in
+[`public-install-state.json`](https://github.com/sulmusic2-star/agent-vigil/blob/main/docs/public-install-state.json).
+This packaged guide is not a live publication report.
 
-Commit only after the policy and workflow commands match the repository:
+## Enforcement
 
-```bash
-git add .agent-vigil.json .github/pull_request_template.md \
-  .github/workflows/agent-vigil.yml \
-  .github/workflows/agent-vigil-outcomes.yml
-if [ -f .agent-vigil-runner.json ]; then
-  git add .agent-vigil-runner.json
-fi
-git commit -m "Install Agent Vigil"
-
-npx --yes "$AGENT_VIGIL_PACKAGE" doctor
-```
-
-`doctor` fails its readiness checks while the controls are uncommitted because
-the hosted inputs are bound to committed `HEAD`. A passing post-commit `doctor`
-verifies the installed files. It does not make the check required in GitHub.
-Configure an externally trusted required workflow or App check before treating
-the result as merge or deployment enforcement.
-
-The package selects and prints the immutable reviewed Action commit embedded in
-the release, so this normal path does not require the user to find a SHA. An
-explicit `--action-sha` remains available for a separately reviewed override.
-
-A fresh disposable Node-repository measurement of this exact `protect`, commit,
-and `doctor` path was 3.15 seconds on August 28, 2026. Network and package-cache
-state will affect another machine's time.
-
-## Run the continuity proof
-
-This harmless local demonstration deploys nothing:
-
-```bash
-npx --yes "$AGENT_VIGIL_PACKAGE" continuity demo --json
-```
-
-It shows the intended sequence:
-
-```text
-PASS -> CURRENT -> REVOKED -> REVOKED -> CURRENT
-```
-
-A later ordinary green check cannot erase the revocation. Only independent
-signed remediation aimed at that revocation restores permission.
-
-## Verify the release package
-
-Download both `sulmusic-agent-vigil-0.23.2.tgz` and
-`sulmusic-agent-vigil-0.23.2.tgz.sha256` from the
-[v0.23.2 release](https://github.com/sulmusic2-star/agent-vigil/releases/tag/v0.23.2),
-then verify the fixed release checksum:
-
-```bash
-shasum -a 256 -c sulmusic-agent-vigil-0.23.2.tgz.sha256
-```
-
-The verified package is v0.23.2 at commit
-`1c5544d84586249c452adda3f8432a9bdac2ca7a`:
-
-```bash
-curl -fLO \
-  https://github.com/sulmusic2-star/agent-vigil/releases/download/v0.23.2/sulmusic-agent-vigil-0.23.2.tgz
-printf '%s  %s\n' \
-  85dd030bc638625ae75181030268e5561dc7483c32e74253bfb17bf76ad2b839 \
-  sulmusic-agent-vigil-0.23.2.tgz | shasum -a 256 -c -
-```
-
-## npm registry status
-
-The newest registry version observed on August 30, 2026 was v0.21.1:
-
-```bash
-npx --yes @sulmusic/agent-vigil@0.21.1 --help
-```
-
-Use the verified GitHub v0.23.2 package today. Do not request registry v0.23.2
-until npm publishes it publicly.
-
-## Pin the GitHub Action
-
-Pin the reviewed source commit instead of a moving tag:
-
-```yaml
-- uses: sulmusic2-star/agent-vigil@fb21ec981cc7e8c5cb64a3529cb4f4900ca1c502
-```
-
-The Action executes the bundled `dist/cli.js` from that commit. It does not
-install Agent Vigil from the npm registry.
+A repository-owned workflow is suitable for a trial. A job name alone does not
+prove who supplied the workflow. Protected enforcement requires the centrally
+operated Agent Vigil App and a GitHub ruleset bound to that App-owned check.
+First-party staging has demonstrated PASS, FAIL, stale-head NOT CHECKED,
+rollback, and merge-queue blocking. That does not make the production App
+public or prove outside use.
 
 ## Remove it
 
-Agent Vigil does not require a hosted account. Remove the generated control files
-to uninstall it. Review and remove any matching required-check or ruleset entry
-as a separate step. Otherwise, the repository can retain an impossible
-required check.
+Delete the generated Agent Vigil files. Remove any matching required-check or
+ruleset entry separately so the repository is not left waiting for a check that
+can no longer run.
 
-## Verified distribution state
+## Evidence boundary
 
-The facts below were checked on August 30, 2026:
-
-- GitHub release v0.23.2 is public, immutable, and installable.
-- The Marketplace listing exposes v0.23.2.
-- The npm registry reports public version 0.21.1. v0.23.2 is staged but is not
-  yet publicly installable from npm.
-- Outside installation, repeat use, protected-action stops, payment, and
-  revenue require separate evidence.
-
-Machine-readable details are in
-[`public-install-state.json`](public-install-state.json).
+A successful install proves setup, not retained use, a useful catch, payment,
+or revenue. Those are measured separately with maintainer consent.

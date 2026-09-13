@@ -3,6 +3,10 @@ import { readFileSync } from "node:fs";
 import test from "node:test";
 
 const queues = readFileSync(new URL("../docs/MERGE_QUEUES.md", import.meta.url), "utf8");
+const acceptance = readFileSync(
+  new URL("../docs/MERGE_QUEUE_ACCEPTANCE_2026-08-31.md", import.meta.url),
+  "utf8",
+);
 const notary = readFileSync(new URL("../docs/NOTARY_APP.md", import.meta.url), "utf8");
 const dispatcher = readFileSync(new URL("../hosted/merge-queue-dispatcher/README.md", import.meta.url), "utf8");
 const queueWorkflow = readFileSync(new URL("../.github/workflows/agent-vigil-merge-group.yml", import.meta.url), "utf8");
@@ -32,6 +36,22 @@ test("merge-queue docs describe the checked-in path without claiming deployment"
   );
 });
 
+test("live acceptance binds the deployment to the merged source", () => {
+  assert.match(acceptance, /`d1020ceab9f1d8fa3dcaafccd62d6d713e744b69`/);
+  assert.match(acceptance, /`30954ac8-4ba1-45d3-ba81-a6bebfdb89f8`/);
+  assert.match(acceptance, /actions\/runs\/33410193694/);
+  assert.match(acceptance, /actions\/runs\/33410193746/);
+  assert.match(acceptance, /--name agent-vigil-merge-queue-lab/);
+  assert.match(acceptance, /--var ALLOWED_REPOSITORY:agent-vigil\/merge-queue-lab/);
+  assert.match(acceptance, /--var ALLOWED_BASE_REF:refs\/heads\/main/);
+  assert.match(acceptance, /--var WORKFLOW_FILE:agent-vigil-merge-group\.yml/);
+  assert.match(acceptance, /--var TRUSTED_REF:main/);
+  assert.match(acceptance, /No source file was edited for deployment/);
+  assert.match(acceptance, /unsigned webhook request returned HTTP 401/);
+  assert.match(acceptance, /first-party deployment test/);
+  assert.match(acceptance, /not external adoption/);
+});
+
 test("dispatcher instructions name the exact current contract", () => {
   assert.ok(
     dispatcher.indexOf("## Register the queue App") < dispatcher.indexOf("## Required secrets"),
@@ -54,7 +74,8 @@ test("dispatcher instructions name the exact current contract", () => {
   assert.match(dispatcher, /Merge queues: read/);
   assert.match(dispatcher, /candidate-only Docker boundary/);
   assert.match(dispatcher, /AGENT_VIGIL_MERGE_GROUP_DISPATCH_SECRET/);
-  assert.match(dispatcher, /AGENT_VIGIL_GATE_APP_ID/);
+  assert.match(dispatcher, /AGENT_VIGIL_GATE_CLIENT_ID/);
+  assert.match(dispatcher, /replace `AGENT_VIGIL_GATE_APP_ID`/);
   assert.match(dispatcher, /AGENT_VIGIL_GATE_PRIVATE_KEY/);
   assert.match(dispatcher, /GITHUB_APP_ID/);
   assert.match(dispatcher, /GITHUB_APP_PRIVATE_KEY/);
@@ -77,9 +98,10 @@ test("queue App manifest matches the authenticated dispatcher and workflow", () 
   assert.match(queueManifest.hook_attributes.url, /\/github\/merge-group$/);
   assert.equal(queueManifest.hook_attributes.active, false);
   assert.deepEqual(queueManifest.default_events, ["merge_group"]);
-  assert.match(queueWorkflow, /EXPECTED_ACTOR: agent-vigil-gate\[bot\]/);
+  assert.match(queueWorkflow, /EXPECTED_ACTOR: \$\{\{ vars\.AGENT_VIGIL_GATE_ACTOR \|\| 'agent-vigil-gate\[bot\]' \}\}/);
   assert.match(queueWorkflow, /repositories: \$\{\{ github\.event\.repository\.name \}\}/);
   assert.doesNotMatch(queueWorkflow, /repositories: agent-vigil/);
+  assert.match(dispatcher, /AGENT_VIGIL_GATE_ACTOR/);
   assert.equal(queueConfig.vars.ALLOWED_REPOSITORY, "REPLACE_WITH_OWNER/REPLACE_WITH_REPOSITORY");
   assert.equal(queueConfig.vars.WORKFLOW_FILE, "agent-vigil-merge-group.yml");
   assert.match(queueWorkflow, /DISPATCH_SECRET: \$\{\{ secrets\.AGENT_VIGIL_MERGE_GROUP_DISPATCH_SECRET \}\}/);

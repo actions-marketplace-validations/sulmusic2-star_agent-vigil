@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
 import { mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
-import { checkIntegrityDiff } from "../src/detectors/reality.ts";
+import { checkIntegrityDiff, isGeneratedOrVendorPath } from "../src/detectors/reality.ts";
 import { VERSION } from "../src/report.ts";
 
 type Label = {
@@ -25,6 +25,15 @@ const EXPECTED_RULES: Record<string, string[]> = {
   "type-suppression": ["suppression-added"],
 };
 
+// Honest fixtures are negative controls for a particular injector, not a
+// declaration that every unrelated pattern in the source diff is clean. For
+// example, the built-in-mock control contains expect(true).toBe(true), which
+// is correctly reported by the independent constant-oracle rule. Keep that
+// finding visible without mislabeling it as a mock-detector false positive.
+const HONEST_NEGATIVE_RULES: Record<string, string[]> = {
+  "builtin-mock-honest": ["subject-mocked"],
+};
+
 function option(name: string): string | undefined {
   const index = process.argv.indexOf(name);
   return index === -1 ? undefined : process.argv[index + 1];
@@ -45,6 +54,11 @@ function gitSha(root: string): string | undefined {
   catch { return undefined; }
 }
 
+function gitTree(root: string, path: string): string | undefined {
+  try { return execFileSync("git", ["rev-parse", `HEAD:${path}`], { cwd: root, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim(); }
+  catch { return undefined; }
+}
+
 function ratio(numerator: number, denominator: number): number {
   return denominator ? Number((numerator / denominator).toFixed(4)) : 0;
 }
@@ -53,6 +67,7 @@ const corpusRoot = resolve(option("--corpus") ?? "");
 if (!option("--corpus")) throw new Error("usage: npm run benchmark:swarm -- --corpus <swarm-orchestrator/benchmarks/oracle-corpus> [--source-sha <sha>]");
 const sourceRoot = resolve(corpusRoot, "../..");
 const actualSourceSha = gitSha(sourceRoot);
+const actualCorpusTree = gitTree(sourceRoot, "benchmarks/oracle-corpus");
 const expectedSourceSha = option("--source-sha");
 if (expectedSourceSha && actualSourceSha !== expectedSourceSha) {
   throw new Error(`source checkout ${actualSourceSha ?? "has no Git identity"}; expected ${expectedSourceSha}`);
@@ -67,7 +82,7 @@ const rows = walk(corpusRoot).map((labelPath) => {
   const checks = checkIntegrityDiff(diff);
   const firedRules = checks.filter((check) => check.verdict === "contradicted").map((check) => check.ruleId ?? "unlabeled").sort();
   const expectedRules = EXPECTED_RULES[label.category] ?? [];
-  const policyExclusion = /^(?:node_modules|vendor|dist|build|coverage|\.git)\//.test(label.file)
+  const policyExclusion = isGeneratedOrVendorPath(label.file)
     ? "target path is generated, vendored, or build output and is excluded by Agent Vigil's documented static-audit policy"
     : null;
   return {
@@ -96,12 +111,19 @@ const perCategory = categories.map((category) => {
 const mappedRows = rows.filter((row) => !row.honest && row.expectedRules.length > 0);
 const scopedRows = mappedRows.filter((row) => !row.policyExclusion);
 const honestRows = rows.filter((row) => row.honest);
+const honestRowsWithTargetedFalsePositive = honestRows.filter((row) =>
+  (HONEST_NEGATIVE_RULES[row.injector] ?? []).some((rule) => row.firedRules.includes(rule))
+);
+const honestRowsWithOtherFindings = honestRows.filter((row) =>
+  row.firedRules.some((rule) => !(HONEST_NEGATIVE_RULES[row.injector] ?? []).includes(rule))
+);
 const result = {
-  schemaVersion: 1,
+  schemaVersion: 2,
   tool: { name: "agent-vigil", version: VERSION },
   source: {
     repository: "https://github.com/moonrunnerkc/swarm-orchestrator",
     commit: actualSourceSha ?? "unavailable",
+    corpusTree: actualCorpusTree ?? "unavailable",
     corpusRoot: "benchmarks/oracle-corpus",
     labelsVerified: rows.length,
   },
@@ -119,12 +141,14 @@ const result = {
     scopedCases: scopedRows.length,
     exactCatches: scopedRows.filter((row) => row.exactCatch).length,
     exactRecall: ratio(scopedRows.filter((row) => row.exactCatch).length, scopedRows.length),
-    honestFalsePositives: honestRows.filter((row) => row.anyFinding).length,
+    honestTargetedFalsePositives: honestRowsWithTargetedFalsePositive.length,
+    honestOtherFindings: honestRowsWithOtherFindings.length,
   },
   perCategory,
   misses: scopedRows.filter((row) => !row.exactCatch),
   policyExcluded: mappedRows.filter((row) => row.policyExclusion),
-  honestFindings: honestRows.filter((row) => row.anyFinding),
+  honestTargetedFalsePositives: honestRowsWithTargetedFalsePositive,
+  honestOtherFindings: honestRowsWithOtherFindings,
 };
 
 const output = resolve(option("--output") ?? "benchmarks/swarm-oracle-results.json");
@@ -140,7 +164,8 @@ const markdown = [
   `- training-corpus mapped cases: ${result.summary.mappedCases} across ${Object.keys(EXPECTED_RULES).length} categories`,
   `- eligible exact-rule scope: ${result.summary.scopedCases} cases (${result.summary.policyExcludedMappedCases} generated/build-output cases excluded by documented policy)`,
   `- exact catches: ${result.summary.exactCatches}/${result.summary.scopedCases} (${(result.summary.exactRecall * 100).toFixed(1)}%)`,
-  `- honest negative cases with findings: ${result.summary.honestFalsePositives}/${result.summary.honestCases}`,
+  `- honest controls with a targeted false positive: ${result.summary.honestTargetedFalsePositives}/${result.summary.honestCases}`,
+  `- honest controls with an unrelated finding retained for review: ${result.summary.honestOtherFindings}/${result.summary.honestCases}`,
   "",
   "> This is a cross-corpus hardening measurement authored by Agent Vigil's maintainer. It is not an independent benchmark and does not establish universal product superiority. Any-finding rates are diagnostic only and are not comparable to Swarm's expected-category recall.",
   "",
@@ -152,4 +177,4 @@ const markdown = [
   "",
 ].join("\n");
 writeFileSync(output.replace(/\.json$/, ".md"), markdown);
-process.stdout.write(`${result.summary.exactCatches}/${result.summary.scopedCases} exact scoped catches; ${result.summary.honestFalsePositives}/${result.summary.honestCases} honest false positives\n`);
+process.stdout.write(`${result.summary.exactCatches}/${result.summary.scopedCases} exact scoped catches; ${result.summary.honestTargetedFalsePositives}/${result.summary.honestCases} targeted honest-control false positives; ${result.summary.honestOtherFindings}/${result.summary.honestCases} unrelated honest-control findings\n`);

@@ -1,8 +1,9 @@
 name: Stage npm package for approval
 
 on:
-  release:
-    types: [published]
+  push:
+    tags:
+      - "v[0-9]+.[0-9]+.[0-9]+"
 
 permissions: {}
 
@@ -14,9 +15,9 @@ jobs:
   verify-and-pack:
     name: Verify and pack without OIDC
     if: >-
-      github.event_name == 'release' &&
-      github.event.release.prerelease == false &&
-      github.ref == format('refs/tags/{0}', github.event.release.tag_name)
+      github.event_name == 'push' &&
+      github.ref_type == 'tag' &&
+      startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-24.04
     permissions:
       contents: read
@@ -24,7 +25,7 @@ jobs:
       - name: Select and validate the release tag
         id: release
         env:
-          RELEASE_TAG: ${{ github.event.release.tag_name }}
+          RELEASE_TAG: ${{ github.ref_name }}
         run: |
           set -euo pipefail
           if [[ ! "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
@@ -46,12 +47,20 @@ jobs:
           package-manager-cache: false
       - name: Check release identity and staged-publishing support
         env:
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
           RELEASE_TAG: ${{ steps.release.outputs.tag }}
         run: |
           set -euo pipefail
           test "$GITHUB_REF" = "refs/tags/$RELEASE_TAG"
           test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
           test "$(git rev-parse "${RELEASE_TAG}^{commit}")" = "$GITHUB_SHA"
+          if [[ ! "$DEFAULT_BRANCH" =~ ^[A-Za-z0-9._/-]+$ ]] || [[ "$DEFAULT_BRANCH" == -* ]] || [[ "$DEFAULT_BRANCH" == */../* ]]; then
+            echo "Repository default branch is not a safe Git ref name." >&2
+            exit 1
+          fi
+          git check-ref-format --branch "$DEFAULT_BRANCH" >/dev/null
+          git fetch --no-tags origin "+refs/heads/$DEFAULT_BRANCH:refs/remotes/origin/$DEFAULT_BRANCH"
+          git merge-base --is-ancestor "$GITHUB_SHA" "refs/remotes/origin/$DEFAULT_BRANCH"
           PACKAGE_VERSION="$(node -p "require('./package.json').version")"
           test "$RELEASE_TAG" = "v$PACKAGE_VERSION"
           node - "$(npm --version)" <<'NODE'
@@ -65,6 +74,27 @@ jobs:
           NODE
       - name: Install without lifecycle scripts
         run: npm ci --ignore-scripts
+      - name: Fetch the frozen cross-corpus evidence
+        run: |
+          set -euo pipefail
+          git clone --filter=blob:none https://github.com/moonrunnerkc/swarm-orchestrator.git "$RUNNER_TEMP/swarm"
+          git -C "$RUNNER_TEMP/swarm" checkout b2b681ff529929d39a14c0541d0e2b71b642b5da
+      - name: Enforce the frozen cross-corpus gate
+        run: |
+          set -euo pipefail
+          result_dir="$RUNNER_TEMP/cross-corpus-results"
+          mkdir -p "$result_dir"
+          npm run benchmark:swarm -- \
+            --corpus "$RUNNER_TEMP/swarm/benchmarks/oracle-corpus" \
+            --source-sha b2b681ff529929d39a14c0541d0e2b71b642b5da \
+            --output "$result_dir/swarm-oracle-results.json"
+          npm run benchmark:swarm-real -- \
+            --root "$RUNNER_TEMP/swarm/benchmarks/real-prs" \
+            --source-sha b2b681ff529929d39a14c0541d0e2b71b642b5da \
+            --output "$result_dir/swarm-real-results.json"
+          npm run benchmark:gate -- \
+            --oracle "$result_dir/swarm-oracle-results.json" \
+            --real "$result_dir/swarm-real-results.json"
       - name: Verify the exact release source
         run: |
           set -euo pipefail
@@ -164,7 +194,7 @@ jobs:
           if (lstatSync(join(directory, envelopeName)).size > 64 * 1024) fail("release envelope exceeds the 64 KiB bound");
           NODE
       - name: Upload the fixed package artifact
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: agent-vigil-npm-package
           path: ${{ runner.temp }}/npm-release
@@ -175,9 +205,9 @@ jobs:
     name: Stage the verified tarball with OIDC
     needs: verify-and-pack
     if: >-
-      github.event_name == 'release' &&
-      github.event.release.prerelease == false &&
-      github.ref == format('refs/tags/{0}', github.event.release.tag_name)
+      github.event_name == 'push' &&
+      github.ref_type == 'tag' &&
+      startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-24.04
     # External authorization boundary: configure this environment to allow only
     # protected release tags, and require this same environment in npm Trusted Publisher.
@@ -194,13 +224,13 @@ jobs:
           registry-url: https://registry.npmjs.org
           package-manager-cache: false
       - name: Download the fixed package artifact
-        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: agent-vigil-npm-package
           path: ${{ runner.temp }}/npm-release
       - name: Validate and stage only the verified tarball
         env:
-          RELEASE_TAG: ${{ github.event.release.tag_name }}
+          RELEASE_TAG: ${{ github.ref_name }}
         run: |
           set -euo pipefail
           node - "$(npm --version)" <<'NODE'
